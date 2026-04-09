@@ -69,7 +69,7 @@ def grade(text: str, key_concepts: str = "") -> Tuple[int, str, bool]:
         model = _get_client()
         response = model.generate_content(
             [prompt, user_msg],
-            generation_config={"max_output_tokens": 400, "temperature": 0.2}
+            generation_config={"max_output_tokens": 1024, "temperature": 0.2}
         )
         raw = response.text.strip()
         return _parse_response(raw)
@@ -80,6 +80,12 @@ def grade(text: str, key_concepts: str = "") -> Tuple[int, str, bool]:
 def _parse_response(raw: str) -> Tuple[int, str, bool]:
     try:
         cleaned = re.sub(r"```json|```", "", raw).strip()
+        # 若 JSON 被截斷，嘗試補上結尾
+        if not cleaned.endswith("}"):
+            # 找最後一個完整的 key-value，補上結尾
+            last_quote = cleaned.rfind('"')
+            if last_quote > 0:
+                cleaned = cleaned[:last_quote + 1] + "}"
         data = json.loads(cleaned)
         score = int(data.get("score", 0))
         if score not in VALID_SCORES:
@@ -88,6 +94,15 @@ def _parse_response(raw: str) -> Tuple[int, str, bool]:
         needs_review = bool(data.get("needs_review", False))
         return score, justification, needs_review
     except Exception:
+        # 嘗試用 regex 直接抓 score
+        score_match = re.search(r'"score"\s*:\s*(\d+)', raw)
+        if score_match:
+            score = int(score_match.group(1))
+            if score not in VALID_SCORES:
+                score = 0
+            just_match = re.search(r'"justification"\s*:\s*"([^"]{10,})', raw)
+            justification = just_match.group(1)[:300] + "..." if just_match else "See raw response."
+            return score, justification, True
         return 0, f"Could not parse AI response. Raw: {raw[:200]}", True
 
 
