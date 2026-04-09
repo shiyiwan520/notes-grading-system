@@ -159,7 +159,19 @@ def update_student_passcode(semester: str, student_id: str, passcode: str):
             if (r.get("semester") == semester
                     and r.get("student_id","").upper() == student_id.upper()):
                 # 強制以文字格式存入，避免 Sheets 把 0924 變成 924
-                ws.update_cell(i, 4, "'" + passcode if passcode else "")
+                cell = gspread.utils.rowcol_to_a1(i, 4)
+                ws.update(
+                    cell,
+                    [[passcode]],
+                    value_input_option="RAW"
+                )
+                # 額外設定儲存格格式為純文字
+                try:
+                    ss2 = _get_spreadsheet()
+                    ws2 = ss2.worksheet(SHEET_STUDENTS)
+                    ws2.format(cell, {"numberFormat": {"type": "TEXT"}})
+                except Exception:
+                    pass
                 _invalidate()
                 return True
         return False
