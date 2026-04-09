@@ -66,7 +66,7 @@ def render(semester: str):
         if st.button("Import from file / 從檔案匯入", key="import_file"):
             with st.spinner("Reading file... / 讀取檔案中..."):
                 try:
-                    df_up = pd.read_csv(uploaded, header=None, names=["student_id", "name"])
+                    df_up = pd.read_csv(uploaded, header=None, names=["student_id", "name"], encoding="utf-8-sig")
                     parsed = [
                         {"student_id": str(r["student_id"]).strip().upper(),
                          "name": str(r["name"]).strip()}
@@ -160,6 +160,8 @@ def render(semester: str):
 
 def _parse_csv_text(text: str):
     result = []
+    # 移除 BOM 字元
+    text = text.lstrip('﻿')
     for line in text.strip().splitlines():
         line = line.strip()
         if not line:
