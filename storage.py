@@ -321,7 +321,8 @@ def upload_pdf_to_drive(pdf_bytes: bytes, filename: str, semester: str, week: st
         file = service.files().create(
             body={"name": filename, "parents": [week_folder]},
             media_body=MediaIoBaseUpload(io.BytesIO(pdf_bytes), mimetype="application/pdf"),
-            fields="id, webViewLink"
+            fields="id, webViewLink",
+            supportsAllDrives=True
         ).execute()
         return file.get("webViewLink", "")
     except Exception as e:
@@ -333,21 +334,30 @@ def _get_or_create_folder(service, name: str, parent_id: str) -> str:
     results = service.files().list(
         q=(f"name='{name}' and mimeType='application/vnd.google-apps.folder' "
            f"and '{parent_id}' in parents and trashed=false"),
-        fields="files(id)"
+        fields="files(id)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True
     ).execute()
     files = results.get("files", [])
     if files:
         return files[0]["id"]
     return service.files().create(
-        body={"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]},
-        fields="id"
+        body={"name": name, "mimeType": "application/vnd.google-apps.folder",
+              "parents": [parent_id]},
+        fields="id",
+        supportsAllDrives=True
     ).execute()["id"]
 
 
 def _delete_file_if_exists(service, filename: str, parent_id: str):
     results = service.files().list(
         q=f"name='{filename}' and '{parent_id}' in parents and trashed=false",
-        fields="files(id)"
+        fields="files(id)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True
     ).execute()
     for f in results.get("files", []):
-        service.files().delete(fileId=f["id"]).execute()
+        service.files().delete(
+            fileId=f["id"],
+            supportsAllDrives=True
+        ).execute()
