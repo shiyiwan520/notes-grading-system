@@ -125,10 +125,11 @@ def render(semester: str):
             )
 
             if st.button("💾 Save / 儲存", key=f"save_{idx}"):
-                final = "" if new_score.startswith("(") else new_score
-                storage.update_record(sid, week, semester, {
-                    "final_score": final,
-                    "released": str(release_toggle),
-                })
-                st.success("Saved! / 已儲存！")
+                with st.spinner("Saving... / 儲存中，請稍候..."):
+                    final = "" if new_score.startswith("(") else new_score
+                    storage.update_record(sid, week, semester, {
+                        "final_score": final,
+                        "released": str(release_toggle),
+                    })
+                st.success("✅ Saved! / 已儲存！")
                 st.rerun()
