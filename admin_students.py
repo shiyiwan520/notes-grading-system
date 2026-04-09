@@ -51,9 +51,12 @@ def render(semester: str):
                 parsed = _parse_csv_text(csv_text)
             if parsed:
                 with st.spinner(f"Saving {len(parsed)} students... / 儲存 {len(parsed)} 名學生到雲端..."):
-                    storage.save_students(semester, parsed)
-                st.success(f"✅ Imported {len(parsed)} students! / 成功匯入 {len(parsed)} 名學生！")
-                st.rerun()
+                    try:
+                        storage.save_students(semester, parsed)
+                        st.success(f"✅ Imported {len(parsed)} students! / 成功匯入 {len(parsed)} 名學生！")
+                        st.rerun()
+                    except Exception as save_err:
+                        st.error(f"Save failed / 儲存失敗：{save_err}")
             else:
                 st.error("Could not parse. Check format (no header). / 無法解析，請確認格式且無表頭。")
 
@@ -127,14 +130,17 @@ def render(semester: str):
         if st.button("Add / 新增", key="add_one"):
             if new_id and new_name:
                 with st.spinner("Saving... / 儲存中..."):
-                    existing = storage.get_students(semester)
-                    if any(s["student_id"].upper() == new_id for s in existing):
-                        st.warning("⚠️ Student ID already exists. / 學號已存在。")
-                    else:
-                        existing.append({"student_id": new_id, "name": new_name, "passcode": ""})
-                        storage.save_students(semester, existing)
-                        st.success(f"✅ Added {new_id} {new_name}!")
-                        st.rerun()
+                    try:
+                        existing = storage.get_students(semester)
+                        if any(s["student_id"].upper() == new_id for s in existing):
+                            st.warning("⚠️ Student ID already exists. / 學號已存在。")
+                        else:
+                            existing.append({"student_id": new_id, "name": new_name, "passcode": ""})
+                            storage.save_students(semester, existing)
+                            st.success(f"✅ Added {new_id} {new_name}!")
+                            st.rerun()
+                    except Exception as save_err:
+                        st.error(f"Save failed / 儲存失敗：{save_err}")
             else:
                 st.error("Please fill in both fields. / 請填寫學號與姓名。")
 

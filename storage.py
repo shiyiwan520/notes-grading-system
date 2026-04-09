@@ -135,22 +135,19 @@ def get_students(semester: str) -> List[Dict]:
 
 
 def save_students(semester: str, students: List[Dict]):
-    try:
-        ss = _get_spreadsheet()
-        ws = _get_or_create_ws(ss, SHEET_STUDENTS, STUDENT_FIELDS)
-        other = [r for r in ws.get_all_records() if r.get("semester") != semester]
-        all_rows = [STUDENT_FIELDS]
-        for r in other:
-            all_rows.append([r.get("semester",""), r.get("student_id",""),
-                             r.get("name",""), r.get("passcode","")])
-        for s in students:
-            all_rows.append([semester, s["student_id"].upper(),
-                             s["name"], s.get("passcode","")])
-        ws.clear()
-        ws.update(all_rows)
-        _invalidate()
-    except Exception as e:
-        st.error(f"Failed to save students: {e}")
+    ss = _get_spreadsheet()
+    ws = _get_or_create_ws(ss, SHEET_STUDENTS, STUDENT_FIELDS)
+    other = [r for r in ws.get_all_records() if r.get("semester") != semester]
+    all_rows = [STUDENT_FIELDS]
+    for r in other:
+        all_rows.append([r.get("semester",""), r.get("student_id",""),
+                         r.get("name",""), r.get("passcode","")])
+    for s in students:
+        all_rows.append([semester, s["student_id"].upper(),
+                         s["name"], s.get("passcode","")])
+    ws.clear()
+    ws.update(all_rows)
+    _invalidate()
 
 
 def update_student_passcode(semester: str, student_id: str, passcode: str):
