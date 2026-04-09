@@ -45,6 +45,72 @@ def show_announcements():
             st.info(f"📢 {ann['content']}  \n*{ann['posted_at']}*")
 
 # ════════════════════════════════════════════════════════════════
+#  共用函式：繳交處理（必須在 if/elif 之前定義）
+# ════════════════════════════════════════════════════════════════
+def _process_submission(student_id, student_name, week, semester, uploaded_file, is_late=False):
+    """共用繳交處理函式"""
+    existing = storage.find_record(student_id, week, semester)
+    if existing and not st.session_state.confirm_overwrite:
+        st.warning(
+            f"A submission already exists for **{student_id}** Week {week}.  \n"
+            f"**{student_id}** 本週已有繳交紀錄。"
+        )
+        st.session_state.confirm_overwrite = st.checkbox(
+            "Confirm overwrite / 確認覆蓋舊紀錄", key="overwrite_cb"
+        )
+        return
+
+    st.session_state.confirm_overwrite = False
+
+    with st.spinner("Processing... / 處理中..."):
+        pdf_bytes = uploaded_file.read()
+        text, read_error = pdf_reader.extract_text_from_bytes(pdf_bytes)
+        drive_url = storage.upload_pdf_to_drive(pdf_bytes, f"{student_id}_{student_name}.pdf", semester, week)
+        week_config = storage.get_week_config(semester, week)
+        key_concepts = week_config.get("key_concepts", "") if week_config else ""
+
+        if read_error or not text.strip():
+            score, justification, needs_review = 0, "PDF could not be read (possibly scanned). Manual review required.", True
+            scan_flag = True
+        else:
+            score, justification, needs_review = grader.grade(text, key_concepts)
+            scan_flag = False
+
+        record = {
+            "semester": semester,
+            "student_id": student_id,
+            "name": student_name,
+            "week": week,
+            "filename": f"{student_id}_{student_name}.pdf",
+            "drive_url": drive_url or "",
+            "ai_score": score,
+            "ai_justification": justification,
+            "needs_review": needs_review,
+            "scan_only": scan_flag,
+            "is_late": is_late,
+            "final_score": "",
+            "released": False,
+            "submitted_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        storage.save_record(record, overwrite=bool(existing))
+
+    st.success("Submitted successfully! / 繳交成功！")
+    if is_late:
+        st.info("This submission is marked as late. / 本次繳交已標記為補交。")
+    st.info(
+        f"**Student ID / 學號：** {student_id}  \n"
+        f"**Name / 姓名：** {student_name}  \n"
+        f"**Week / 週次：** Week {week}  \n"
+        f"**Submitted at / 繳交時間：** {record['submitted_at']}"
+    )
+    st.markdown(
+        "> Grades will be released after the teacher reviews your submission.  \n"
+        "> 成績將在老師審閱後公開，請稍後至查詢成績頁面查看。"
+    )
+    notifications.notify_new_submission(record)
+
+
+# ════════════════════════════════════════════════════════════════
 #  頁面 1：學生繳交作業
 # ════════════════════════════════════════════════════════════════
 if page == "📤 Submit Notes / 繳交作業":
@@ -196,83 +262,7 @@ if page == "📤 Submit Notes / 繳交作業":
             )
 
 
-def _process_submission(student_id, student_name, week, semester, uploaded_file, is_late=False):
-    """共用繳交處理函式"""
-    # 重複繳交檢查
-    existing = storage.find_record(student_id, week, semester)
-    if existing and not st.session_state.confirm_overwrite:
-        st.warning(
-            f"⚠️ A submission already exists for **{student_id}** Week {week}.  \n"
-            f"**{student_id}** 本週已有繳交紀錄。"
-        )
-        st.session_state.confirm_overwrite = st.checkbox(
-            "Confirm overwrite / 確認覆蓋舊紀錄", key="overwrite_cb"
-        )
-        return
 
-    st.session_state.confirm_overwrite = False
-
-    with st.spinner("Processing... / 處理中..."):
-        # 讀取 PDF
-        pdf_bytes = uploaded_file.read()
-        text, read_error = pdf_reader.extract_text_from_bytes(pdf_bytes)
-
-        # 上傳到 Google Drive
-        filename = f"{student_id}_{student_name}.pdf"
-        drive_url = storage.upload_pdf_to_drive(
-            pdf_bytes, filename, semester, week
-        )
-
-        # 取得本週重點概念
-        week_config = storage.get_week_config(semester, week)
-        key_concepts = week_config.get("key_concepts", "") if week_config else ""
-
-        # AI 評分
-        if read_error or not text.strip():
-            score, justification, needs_review = 0, "PDF could not be read (possibly a scanned image). Manual review required.", True
-            scan_flag = True
-        else:
-            score, justification, needs_review = grader.grade(text, key_concepts)
-            scan_flag = False
-
-        # 儲存到 Google Sheets
-        record = {
-            "semester": semester,
-            "student_id": student_id,
-            "name": student_name,
-            "week": week,
-            "filename": filename,
-            "drive_url": drive_url or "",
-            "ai_score": score,
-            "ai_justification": justification,
-            "needs_review": needs_review,
-            "scan_only": scan_flag,
-            "is_late": is_late,
-            "final_score": "",
-            "released": False,
-            "submitted_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        storage.save_record(record, overwrite=bool(
-            storage.find_record(student_id, week, semester)
-        ))
-
-    # 成功畫面
-    st.success("✅ Submitted successfully! / 繳交成功！")
-    if is_late:
-        st.info("📨 This submission is marked as **late**. / 本次繳交已標記為**補交**。")
-    st.info(
-        f"**Student ID / 學號：** {student_id}  \n"
-        f"**Name / 姓名：** {student_name}  \n"
-        f"**Week / 週次：** Week {week}  \n"
-        f"**Submitted at / 繳交時間：** {record['submitted_at']}"
-    )
-    st.markdown(
-        "> 📣 Grades will be released after the teacher reviews your submission.  \n"
-        "> 成績將在老師審閱後公開，請稍後至「查詢成績」頁面查看。"
-    )
-
-    # 寄 Email 通知（非同步，不影響使用者體驗）
-    notifications.notify_new_submission(record)
 
 
 # ════════════════════════════════════════════════════════════════
