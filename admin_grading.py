@@ -91,11 +91,21 @@ def render(semester: str):
         header = f"{flag_str}  {sid} — {name}  |  Week {week}  |  Score: {display_score}"
 
         with st.expander(header):
-            # PDF 預覽連結
-            if drive_url:
-                st.markdown(f"[📄 View PDF in Google Drive / 在 Drive 預覽原始 PDF]({drive_url})")
+            # PDF 下載（Supabase signed URL）
+            storage_path = rec.get("storage_path", "") or rec.get("drive_url", "")
+            orig_name = rec.get("original_filename") or rec.get("filename", "submission.pdf")
+            file_size = rec.get("file_size_bytes", "")
+            size_str = f"{round(int(file_size)/1024, 1)} KB" if str(file_size).isdigit() else ""
+
+            if storage_path and not storage_path.startswith("sheets://"):
+                signed_url = storage.get_pdf_signed_url(storage_path, expires_in=3600)
+                if signed_url:
+                    st.link_button(f"📄 View / Download PDF {size_str}", signed_url)
+                    st.caption(f"Original filename / 原始檔名：{orig_name}  {size_str}")
+                else:
+                    st.caption("Could not generate PDF link. / 無法產生 PDF 連結。")
             else:
-                st.caption("PDF not available in Drive.")
+                st.caption("PDF not available. / PDF 無法取得。")
 
             st.markdown(f"**AI Score / AI 分數：** {ai_score}")
             st.markdown(f"**AI Feedback / AI 評語：**  \n{justification}")

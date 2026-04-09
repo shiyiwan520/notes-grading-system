@@ -48,64 +48,136 @@ def show_announcements():
 #  共用函式：繳交處理（必須在 if/elif 之前定義）
 # ════════════════════════════════════════════════════════════════
 def _process_submission(student_id, student_name, week, semester, uploaded_file, is_late=False):
-    """共用繳交處理函式"""
+    """
+    安全繳交流程：
+    1. 大小驗證  2. 上傳 Supabase  3. AI 評分  4. 寫 Sheets  5. 刪舊檔  6. 顯示成功
+    任一步驟失敗都停止，不顯示假成功。
+    """
     existing = storage.find_record(student_id, week, semester)
     if existing and not st.session_state.confirm_overwrite:
         st.warning(
-            f"A submission already exists for **{student_id}** Week {week}.  \n"
-            f"**{student_id}** 本週已有繳交紀錄。"
+            "You have already submitted for Week " + str(week) + ". Submitting again will replace your previous submission.\n"
+            "您本週已有繳交紀錄，重新繳交將取代上一份作業。"
         )
         st.session_state.confirm_overwrite = st.checkbox(
-            "Confirm overwrite / 確認覆蓋舊紀錄", key="overwrite_cb"
+            "Confirm resubmission / 確認重新繳交", key="overwrite_cb"
         )
         return
 
     st.session_state.confirm_overwrite = False
 
-    with st.spinner("Processing... / 處理中..."):
-        pdf_bytes = uploaded_file.read()
+    # 步驟1：讀取並驗證檔案大小
+    pdf_bytes = uploaded_file.read()
+    file_size = len(pdf_bytes)
+    if file_size > storage.MAX_FILE_SIZE_BYTES:
+        size_mb = round(file_size / (1024 * 1024), 2)
+        st.error(
+            "File too large (" + str(size_mb) + " MB). Maximum allowed size is 5 MB. "
+            "Please compress your PDF before uploading.\n"
+            "檔案過大（" + str(size_mb) + " MB），上限為 5 MB。"
+            "請先壓縮 PDF 後再重新上傳。建議保留清晰可閱讀的內容即可，不需要高解析圖片。"
+        )
+        return
+
+    # 步驟2：上傳 PDF 到 Supabase
+    with st.spinner("Uploading PDF... / 上傳檔案中，請稍候..."):
+        old_path = existing.get("storage_path", "") if existing else ""
+        upload_result = storage.upload_pdf(
+            pdf_bytes=pdf_bytes,
+            original_filename=uploaded_file.name,
+            student_id=student_id,
+            student_name=student_name,
+            semester=semester,
+            week=week,
+        )
+
+    if not upload_result["success"]:
+        st.error(
+            "File upload failed. Your submission has NOT been recorded. Please try again.\n"
+            "檔案上傳失敗，您的作業尚未繳交，請稍後再試。"
+        )
+        return
+
+    # 步驟3：讀取文字 + AI 評分
+    with st.spinner("AI is grading your notes... / AI 評分中，請稍候..."):
         text, read_error = pdf_reader.extract_text_from_bytes(pdf_bytes)
-        drive_url = storage.upload_pdf_to_drive(pdf_bytes, f"{student_id}_{student_name}.pdf", semester, week)
         week_config = storage.get_week_config(semester, week)
         key_concepts = week_config.get("key_concepts", "") if week_config else ""
-
         if read_error or not text.strip():
-            score, justification, needs_review = 0, "PDF could not be read (possibly scanned). Manual review required.", True
+            score, justification, needs_review = (
+                0, "PDF could not be read (possibly scanned image). Manual review required.", True
+            )
             scan_flag = True
         else:
             score, justification, needs_review = grader.grade(text, key_concepts)
             scan_flag = False
 
-        record = {
-            "semester": semester,
-            "student_id": student_id,
-            "name": student_name,
-            "week": week,
-            "filename": f"{student_id}_{student_name}.pdf",
-            "drive_url": drive_url or "",
-            "ai_score": score,
-            "ai_justification": justification,
-            "needs_review": needs_review,
-            "scan_only": scan_flag,
-            "is_late": is_late,
-            "final_score": "",
-            "released": False,
-            "submitted_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        storage.save_record(record, overwrite=bool(existing))
+    # 步驟4：寫入 Google Sheets
+    submitted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    record = {
+        "semester": semester,
+        "student_id": student_id,
+        "name": student_name,
+        "week": week,
+        "original_filename": uploaded_file.name,
+        "file_size_bytes": file_size,
+        "storage_bucket": storage.SUPABASE_BUCKET,
+        "storage_path": upload_result["storage_path"],
+        "file_url": upload_result["file_url"],
+        "replaced_previous": bool(existing),
+        "ai_score": score,
+        "ai_justification": justification,
+        "needs_review": needs_review,
+        "scan_only": scan_flag,
+        "is_late": is_late,
+        "final_score": "",
+        "released": False,
+        "submitted_at": submitted_at,
+    }
 
-    st.success("Submitted successfully! / 繳交成功！")
+    with st.spinner("Saving submission record... / 儲存繳交紀錄中..."):
+        try:
+            storage.save_record(record, overwrite=bool(existing))
+        except Exception as e:
+            storage.delete_old_pdf(upload_result["storage_path"])
+            st.error(
+                "Failed to save your submission record. The uploaded file has been removed. Please try again.\n"
+                "繳交紀錄儲存失敗，已自動清除上傳的檔案，請稍後再試。"
+            )
+            return
+
+    # 步驟5：確認 Sheets 寫入後才刪舊檔
+    if existing and old_path:
+        storage.delete_old_pdf(old_path)
+
+    # 步驟6：顯示真實成功訊息
+    if existing:
+        st.success(
+            "Resubmission successful! Your previous submission has been replaced.\n"
+            "重新繳交成功！前一份作業已自動取代。"
+        )
+    else:
+        st.success("Submitted successfully!\n繳交成功！")
+
     if is_late:
-        st.info("This submission is marked as late. / 本次繳交已標記為補交。")
+        st.info("This submission is marked as late.\n本次繳交已標記為補交。")
+    if scan_flag:
+        st.warning(
+            "Your PDF appears to be a scanned image. AI grading was not possible — your teacher will grade it manually.\n"
+            "您上傳的 PDF 為掃描版圖片，AI 無法自動評分，老師將手動批改。"
+        )
+
+    size_kb = round(file_size / 1024, 1)
     st.info(
         f"**Student ID / 學號：** {student_id}  \n"
         f"**Name / 姓名：** {student_name}  \n"
         f"**Week / 週次：** Week {week}  \n"
-        f"**Submitted at / 繳交時間：** {record['submitted_at']}"
+        f"**File size / 檔案大小：** {size_kb} KB  \n"
+        f"**Submitted at / 繳交時間：** {submitted_at}"
     )
     st.markdown(
         "> Grades will be released after the teacher reviews your submission.  \n"
-        "> 成績將在老師審閱後公開，請稍後至查詢成績頁面查看。"
+        "> 成績將在老師審閱後公開，請稍後至「Check Grade / 查詢成績」頁面查看。"
     )
     notifications.notify_new_submission(record)
 
@@ -119,6 +191,12 @@ if page == "📤 Submit Notes / 繳交作業":
     st.markdown(
         "Please upload your English notes in PDF format.  \n"
         "請上傳您的英文筆記 PDF 檔案。"
+    )
+    st.info(
+        "Only PDF files accepted, maximum **5 MB** per file. "
+        "If you resubmit the same week, only the latest submission will be kept.  \n"
+        "僅接受 **PDF** 格式，每份檔案大小請控制在 **5 MB** 以內。"
+        "若同一週重複提交，系統將以最後一次提交為準。"
     )
     st.divider()
 

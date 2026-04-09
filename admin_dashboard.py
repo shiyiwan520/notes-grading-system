@@ -30,12 +30,16 @@ def render(semester: str):
     scan_only = sum(1 for r in records if str(r.get("scan_only", "")).lower() in ("true","1"))
     late_count = sum(1 for r in records if str(r.get("is_late", "")).lower() in ("true","1"))
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Students / 學生", total_students)
     c2.metric("Submissions / 繳交", total_submissions)
     c3.metric("⚠️ Review / 待複查", needs_review)
     c4.metric("📄 Scan only", scan_only)
     c5.metric("📨 Late / 補交", late_count)
+
+    # 容量摘要
+    stats = storage.get_storage_stats(semester)
+    c6.metric("Storage / 已用空間", f"{stats['total_mb']} MB")
 
     st.divider()
 

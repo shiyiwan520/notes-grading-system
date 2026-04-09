@@ -10,8 +10,7 @@ from datetime import datetime
 from typing import Optional, List, Dict
 import gspread
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+# Google Drive removed - PDFs stored in Sheets as base64
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -25,11 +24,17 @@ SHEET_WEEKS         = "weeks"
 SHEET_ANNOUNCEMENTS = "announcements"
 
 GRADE_FIELDS = [
-    "semester", "student_id", "name", "week", "filename",
-    "drive_url", "ai_score", "ai_justification",
+    "semester", "student_id", "name", "week",
+    "original_filename", "file_size_bytes", "storage_bucket",
+    "storage_path", "file_url",
+    "replaced_previous",
+    "ai_score", "ai_justification",
     "needs_review", "scan_only", "is_late",
     "final_score", "released", "submitted_at",
 ]
+
+# backward-compat alias
+LEGACY_FIELD_MAP = {"drive_url": "file_url", "filename": "original_filename"}
 
 WEEK_FIELDS = ["semester", "week", "open", "deadline", "key_concepts"]
 ANN_FIELDS  = ["id", "content", "posted_at", "active"]
@@ -41,10 +46,7 @@ def _get_gspread_client():
     return gspread.authorize(creds)
 
 
-@st.cache_resource
-def _get_drive_service():
-    creds = Credentials.from_service_account_info(_load_creds(), scopes=SCOPES)
-    return build("drive", "v3", credentials=creds)
+
 
 
 def _load_creds():
@@ -311,53 +313,121 @@ def deactivate_announcement(ann_id: str):
 
 # ── Google Drive ──────────────────────────────────────────────
 
-def upload_pdf_to_drive(pdf_bytes: bytes, filename: str, semester: str, week: str) -> Optional[str]:
+# ════════════════════════════════════════════════════════════════
+#  Supabase Storage — PDF 上傳與管理
+# ════════════════════════════════════════════════════════════════
+
+MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB
+SUPABASE_BUCKET = "notes-pdf"
+
+
+@st.cache_resource
+def _get_supabase():
+    """建立 Supabase client（server-side only，key 不暴露前端）"""
+    from supabase import create_client
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+
+def upload_pdf(
+    pdf_bytes: bytes,
+    original_filename: str,
+    student_id: str,
+    student_name: str,
+    semester: str,
+    week: str,
+    old_storage_path: Optional[str] = None,
+) -> Dict:
+    """
+    安全上傳 PDF 到 Supabase Storage。
+    回傳 dict：
+      success: bool
+      storage_path: str
+      file_url: str
+      file_size_bytes: int
+      error: str（失敗時）
+
+    安全覆蓋流程：
+      1. 上傳新檔（新路徑）
+      2. 回傳成功 → 呼叫端寫 Sheets
+      3. 呼叫端確認 Sheets 寫入後再呼叫 delete_old_pdf()
+    """
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    safe_name = f"{student_name}".replace(" ", "_").replace("/", "_")
+    storage_path = f"{semester}/Week_{str(week).zfill(2)}/{student_id}_{safe_name}_{timestamp}.pdf"
+
     try:
-        service = _get_drive_service()
-        root = st.secrets["GOOGLE_DRIVE_FOLDER_ID"]
-        sem_folder = _get_or_create_folder(service, semester, root)
-        week_folder = _get_or_create_folder(service, f"Week_{str(week).zfill(2)}", sem_folder)
-        _delete_file_if_exists(service, filename, week_folder)
-        file = service.files().create(
-            body={"name": filename, "parents": [week_folder]},
-            media_body=MediaIoBaseUpload(io.BytesIO(pdf_bytes), mimetype="application/pdf"),
-            fields="id, webViewLink",
-            supportsAllDrives=True
-        ).execute()
-        return file.get("webViewLink", "")
+        sb = _get_supabase()
+        sb.storage.from_(SUPABASE_BUCKET).upload(
+            path=storage_path,
+            file=pdf_bytes,
+            file_options={"content-type": "application/pdf", "upsert": "false"},
+        )
+        # 產生 signed URL（有效期 1 年）
+        signed = sb.storage.from_(SUPABASE_BUCKET).create_signed_url(
+            storage_path, expires_in=365 * 24 * 3600
+        )
+        file_url = signed.get("signedURL", "") or signed.get("signed_url", "")
+        return {
+            "success": True,
+            "storage_path": storage_path,
+            "file_url": file_url,
+            "file_size_bytes": len(pdf_bytes),
+            "error": "",
+        }
     except Exception as e:
-        st.warning(f"Drive upload failed: {e}")
+        return {
+            "success": False,
+            "storage_path": "",
+            "file_url": "",
+            "file_size_bytes": len(pdf_bytes),
+            "error": str(e),
+        }
+
+
+def delete_old_pdf(old_storage_path: str) -> bool:
+    """刪除 Supabase 上的舊版 PDF（只在新檔和 Sheets 都確認後呼叫）"""
+    if not old_storage_path:
+        return True
+    try:
+        sb = _get_supabase()
+        sb.storage.from_(SUPABASE_BUCKET).remove([old_storage_path])
+        return True
+    except Exception:
+        return False
+
+
+def get_pdf_signed_url(storage_path: str, expires_in: int = 3600) -> Optional[str]:
+    """產生有效期限的 signed URL 供老師下載/預覽（預設 1 小時）"""
+    if not storage_path:
+        return None
+    try:
+        sb = _get_supabase()
+        result = sb.storage.from_(SUPABASE_BUCKET).create_signed_url(
+            storage_path, expires_in=expires_in
+        )
+        return result.get("signedURL") or result.get("signed_url")
+    except Exception:
         return None
 
 
-def _get_or_create_folder(service, name: str, parent_id: str) -> str:
-    results = service.files().list(
-        q=(f"name='{name}' and mimeType='application/vnd.google-apps.folder' "
-           f"and '{parent_id}' in parents and trashed=false"),
-        fields="files(id)",
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True
-    ).execute()
-    files = results.get("files", [])
-    if files:
-        return files[0]["id"]
-    return service.files().create(
-        body={"name": name, "mimeType": "application/vnd.google-apps.folder",
-              "parents": [parent_id]},
-        fields="id",
-        supportsAllDrives=True
-    ).execute()["id"]
+def get_storage_stats(semester: str) -> Dict:
+    """計算目前學期的儲存空間使用摘要"""
+    records = load_all_records(semester)
+    total_files = len(records)
+    total_bytes = sum(
+        int(r.get("file_size_bytes", 0))
+        for r in records
+        if str(r.get("file_size_bytes", "0")).isdigit()
+    )
+    return {
+        "total_files": total_files,
+        "total_bytes": total_bytes,
+        "total_mb": round(total_bytes / (1024 * 1024), 2),
+    }
 
 
-def _delete_file_if_exists(service, filename: str, parent_id: str):
-    results = service.files().list(
-        q=f"name='{filename}' and '{parent_id}' in parents and trashed=false",
-        fields="files(id)",
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True
-    ).execute()
-    for f in results.get("files", []):
-        service.files().delete(
-            fileId=f["id"],
-            supportsAllDrives=True
-        ).execute()
+# backward compat - 舊程式碼可能還呼叫這個
+def upload_pdf_to_drive(pdf_bytes, filename, semester, week):
+    return None
