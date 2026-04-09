@@ -47,8 +47,9 @@ def render(semester: str):
                 key=f"kc_{week_str}"
             )
             if st.button(f"Save Week {week_str} / 儲存", key=f"save_week_{week_str}"):
-                storage.save_week(semester, week_str, new_open,
-                                  new_deadline if new_open else "",
-                                  new_concepts if new_open else "")
-                st.success(f"Week {week_str} saved! / 已儲存！")
+                with st.spinner(f"Saving Week {week_str}... / 儲存中，請稍候..."):
+                    storage.save_week(semester, week_str, new_open,
+                                      new_deadline if new_open else "",
+                                      new_concepts if new_open else "")
+                st.success(f"✅ Week {week_str} saved! / 已儲存！")
                 st.rerun()
