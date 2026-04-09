@@ -65,6 +65,24 @@ def render(settings: dict):
 
     st.divider()
 
+    # ── 總週數設定 ────────────────────────────────────────────
+    st.markdown("**Total weeks / 總週數**")
+    st.caption("Sets how many weeks appear in the Weeks tab. / 決定 Weeks 分頁顯示幾週。")
+    total_weeks = int(settings.get("total_weeks", 16))
+    new_total = st.number_input(
+        "Number of weeks / 週數",
+        min_value=1, max_value=52,
+        value=total_weeks,
+        step=1
+    )
+    if st.button("Save total weeks / 儲存週數", key="save_weeks"):
+        with st.spinner("Saving... / 儲存中..."):
+            storage.save_setting("total_weeks", str(int(new_total)))
+        st.success(f"✅ Total weeks set to {int(new_total)}. / 已設定為 {int(new_total)} 週。")
+        st.rerun()
+
+    st.divider()
+
     # ── App URL（用於 Email 連結）────────────────────────────
     st.markdown("**App URL（for email links / 用於 Email 中的連結）**")
     app_url = settings.get("app_url", "")
