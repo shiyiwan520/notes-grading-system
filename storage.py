@@ -60,7 +60,18 @@ def _get_spreadsheet():
 
 def _get_or_create_ws(ss, title: str, headers: List[str]) -> gspread.Worksheet:
     try:
-        return ss.worksheet(title)
+        ws = ss.worksheet(title)
+        # 若已存在，檢查並補齊缺少的欄位（向後相容）
+        existing_headers = ws.row_values(1) if ws.row_count > 0 else []
+        if existing_headers:
+            for h in headers:
+                if h not in existing_headers:
+                    col = len(existing_headers) + 1
+                    ws.update_cell(1, col, h)
+                    existing_headers.append(h)
+        else:
+            ws.append_row(headers)
+        return ws
     except gspread.WorksheetNotFound:
         ws = ss.add_worksheet(title=title, rows=1000, cols=max(len(headers), 10))
         ws.append_row(headers)

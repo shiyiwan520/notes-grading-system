@@ -24,7 +24,7 @@ def render(semester: str):
         f"顯示 Week 01 到 Week {str(total_weeks).zfill(2)}，可在 Settings 修改總週數。"
     )
 
-    all_weeks = {str(w["week"]): w for w in storage.get_all_weeks(semester)}
+    all_weeks = {str(w["week"]).zfill(2): w for w in storage.get_all_weeks(semester)}
 
     for i in range(1, total_weeks + 1):
         week_str = str(i).zfill(2)
