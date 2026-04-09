@@ -36,8 +36,9 @@ def render():
     )
     if st.button("Post / 發布", type="primary"):
         if new_ann.strip():
-            storage.save_announcement(new_ann.strip())
-            st.success("Announcement posted! / 公告已發布！")
+            with st.spinner("Posting announcement... / 發布公告中..."):
+                storage.save_announcement(new_ann.strip())
+            st.success("✅ Announcement posted! / 公告已發布！")
             st.rerun()
         else:
             st.error("Please enter announcement content. / 請輸入公告內容。")
