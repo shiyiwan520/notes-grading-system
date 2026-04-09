@@ -379,7 +379,7 @@ elif page == "🔍 Check Grade / 查詢成績":
                 (s for s in students if s.get("student_id", "").upper() == q_id),
                 None
             )
-            stored_passcode = str(student_info.get("passcode", "")).strip() if student_info else ""
+            stored_passcode = str(student_info.get("passcode", "")).strip().lstrip("'") if student_info else ""
 
             if stored_passcode and q_passcode != stored_passcode:
                 st.error(

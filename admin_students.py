@@ -29,7 +29,7 @@ def render(semester: str):
         df = df[show_cols]
         if show_passcode_list:
             df["passcode"] = df["passcode"].apply(
-                lambda x: str(x).strip() if str(x).strip() else "—"
+                lambda x: str(x).strip().lstrip("'") if str(x).strip() else "—"
             )
         else:
             df["passcode"] = df["passcode"].apply(

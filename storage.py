@@ -158,7 +158,8 @@ def update_student_passcode(semester: str, student_id: str, passcode: str):
         for i, r in enumerate(records, start=2):
             if (r.get("semester") == semester
                     and r.get("student_id","").upper() == student_id.upper()):
-                ws.update_cell(i, 4, passcode)
+                # 強制以文字格式存入，避免 Sheets 把 0924 變成 924
+                ws.update_cell(i, 4, "'" + passcode if passcode else "")
                 _invalidate()
                 return True
         return False
