@@ -354,8 +354,8 @@ def upload_pdf(
       3. 呼叫端確認 Sheets 寫入後再呼叫 delete_old_pdf()
     """
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    safe_name = f"{student_name}".replace(" ", "_").replace("/", "_")
-    storage_path = f"{semester}/Week_{str(week).zfill(2)}/{student_id}_{safe_name}_{timestamp}.pdf"
+    # 路徑只用學號避免中文字元問題
+    storage_path = f"{semester}/Week_{str(week).zfill(2)}/{student_id}_{timestamp}.pdf"
 
     try:
         sb = _get_supabase()
