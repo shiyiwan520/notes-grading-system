@@ -16,13 +16,25 @@ def render(semester: str):
     students = storage.get_students(semester)
 
     if students:
+        show_passcode_list = st.toggle(
+            "Show passcodes in list / 在名單中顯示驗證碼明文",
+            value=False,
+            key="show_pc_list"
+        )
         df = pd.DataFrame(students)
         show_cols = ["student_id", "name", "passcode"]
         for c in show_cols:
             if c not in df.columns:
                 df[c] = ""
         df = df[show_cols]
-        df["passcode"] = df["passcode"].apply(lambda x: "🔒 Set" if str(x).strip() else "—")
+        if show_passcode_list:
+            df["passcode"] = df["passcode"].apply(
+                lambda x: str(x).strip() if str(x).strip() else "—"
+            )
+        else:
+            df["passcode"] = df["passcode"].apply(
+                lambda x: "🔒 Set" if str(x).strip() else "—"
+            )
         df.columns = ["Student ID / 學號", "Name / 姓名", "Passcode / 驗證碼"]
         st.dataframe(df, use_container_width=True, hide_index=True)
         st.caption(f"Total: {len(students)} students / 共 {len(students)} 名學生")
