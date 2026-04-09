@@ -1,32 +1,29 @@
 """
 storage.py — Google Sheets + Google Drive 資料存取模組
-所有資料永久存在雲端，Streamlit 重啟不會遺失
+修正版：寫入後立即清除快取，避免資料不同步問題
 """
 
 import streamlit as st
 import json
 import io
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-# ── Google API 授權範圍 ───────────────────────────────────────
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
 
-# ── Sheets 工作表名稱 ─────────────────────────────────────────
-SHEET_GRADES       = "grades"
-SHEET_STUDENTS     = "students"
-SHEET_SETTINGS     = "settings"
-SHEET_WEEKS        = "weeks"
+SHEET_GRADES        = "grades"
+SHEET_STUDENTS      = "students"
+SHEET_SETTINGS      = "settings"
+SHEET_WEEKS         = "weeks"
 SHEET_ANNOUNCEMENTS = "announcements"
 
-# ── Grades 欄位定義 ───────────────────────────────────────────
 GRADE_FIELDS = [
     "semester", "student_id", "name", "week", "filename",
     "drive_url", "ai_score", "ai_justification",
@@ -34,62 +31,57 @@ GRADE_FIELDS = [
     "final_score", "released", "submitted_at",
 ]
 
+WEEK_FIELDS = ["semester", "week", "open", "deadline", "key_concepts"]
+ANN_FIELDS  = ["id", "content", "posted_at", "active"]
 
-# ════════════════════════════════════════════════════════════════
-#  認證與連線（使用 st.cache_resource 避免重複建立）
-# ════════════════════════════════════════════════════════════════
 
 @st.cache_resource
 def _get_gspread_client():
-    """建立 gspread 認證客戶端"""
-    creds_json = st.secrets["GOOGLE_CREDENTIALS"]
-    if isinstance(creds_json, str):
-        creds_info = json.loads(creds_json)
-    else:
-        creds_info = dict(creds_json)  # Streamlit TOML secrets 物件
-    creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+    creds = Credentials.from_service_account_info(_load_creds(), scopes=SCOPES)
     return gspread.authorize(creds)
 
 
 @st.cache_resource
 def _get_drive_service():
-    """建立 Google Drive API 服務"""
-    creds_json = st.secrets["GOOGLE_CREDENTIALS"]
-    if isinstance(creds_json, str):
-        creds_info = json.loads(creds_json)
-    else:
-        creds_info = dict(creds_json)
-    creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+    creds = Credentials.from_service_account_info(_load_creds(), scopes=SCOPES)
     return build("drive", "v3", credentials=creds)
 
 
+def _load_creds():
+    creds_json = st.secrets["GOOGLE_CREDENTIALS"]
+    return json.loads(creds_json) if isinstance(creds_json, str) else dict(creds_json)
+
+
 def _get_spreadsheet():
-    """取得主試算表"""
-    gc = _get_gspread_client()
-    sheet_id = st.secrets["GOOGLE_SHEET_ID"]
-    return gc.open_by_key(sheet_id)
+    return _get_gspread_client().open_by_key(st.secrets["GOOGLE_SHEET_ID"])
 
 
-def _get_or_create_worksheet(ss, title: str, headers: List[str]) -> gspread.Worksheet:
-    """取得或建立工作表，並確保表頭存在"""
+def _get_or_create_ws(ss, title: str, headers: List[str]) -> gspread.Worksheet:
     try:
-        ws = ss.worksheet(title)
+        return ss.worksheet(title)
     except gspread.WorksheetNotFound:
-        ws = ss.add_worksheet(title=title, rows=1000, cols=len(headers))
+        ws = ss.add_worksheet(title=title, rows=1000, cols=max(len(headers), 10))
         ws.append_row(headers)
-    return ws
+        return ws
 
 
-# ════════════════════════════════════════════════════════════════
-#  Settings
-# ════════════════════════════════════════════════════════════════
+def _invalidate():
+    st.cache_data.clear()
+
+
+# ── Settings ──────────────────────────────────────────────────
 
 def get_settings() -> Dict:
+    if "settings_cache" not in st.session_state:
+        st.session_state.settings_cache = _fetch_settings()
+    return st.session_state.settings_cache
+
+
+def _fetch_settings() -> Dict:
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_SETTINGS, ["key", "value"])
-        records = ws.get_all_records()
-        return {r["key"]: r["value"] for r in records}
+        ws = _get_or_create_ws(ss, SHEET_SETTINGS, ["key", "value"])
+        return {r["key"]: r["value"] for r in ws.get_all_records() if r.get("key")}
     except Exception:
         return {}
 
@@ -97,86 +89,79 @@ def get_settings() -> Dict:
 def save_setting(key: str, value: str):
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_SETTINGS, ["key", "value"])
+        ws = _get_or_create_ws(ss, SHEET_SETTINGS, ["key", "value"])
         records = ws.get_all_records()
         for i, r in enumerate(records, start=2):
-            if r["key"] == key:
+            if r.get("key") == key:
                 ws.update_cell(i, 2, value)
+                if "settings_cache" in st.session_state:
+                    st.session_state.settings_cache[key] = value
                 return
         ws.append_row([key, value])
+        if "settings_cache" in st.session_state:
+            st.session_state.settings_cache[key] = value
     except Exception as e:
         st.error(f"Failed to save setting: {e}")
 
 
-# ════════════════════════════════════════════════════════════════
-#  Students
-# ════════════════════════════════════════════════════════════════
+# ── Students ──────────────────────────────────────────────────
 
+@st.cache_data(ttl=30)
 def get_students(semester: str) -> List[Dict]:
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_STUDENTS, ["semester", "student_id", "name"])
-        records = ws.get_all_records()
-        return [r for r in records if r.get("semester") == semester]
+        ws = _get_or_create_ws(ss, SHEET_STUDENTS, ["semester", "student_id", "name"])
+        return [r for r in ws.get_all_records()
+                if r.get("semester") == semester
+                and str(r.get("student_id", "")).strip() not in ("", "student_id")]
     except Exception:
         return []
 
 
 def save_students(semester: str, students: List[Dict]):
-    """覆蓋該學期的學生名單"""
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_STUDENTS, ["semester", "student_id", "name"])
-        all_records = ws.get_all_records()
-        # 保留其他學期
-        other = [r for r in all_records if r.get("semester") != semester]
-        new_rows = [[semester, s["student_id"].upper(), s["name"]] for s in students]
-        # 重寫整張表
+        ws = _get_or_create_ws(ss, SHEET_STUDENTS, ["semester", "student_id", "name"])
+        other = [r for r in ws.get_all_records() if r.get("semester") != semester]
         all_rows = [["semester", "student_id", "name"]]
         for r in other:
             all_rows.append([r["semester"], r["student_id"], r["name"]])
-        all_rows.extend(new_rows)
+        for s in students:
+            all_rows.append([semester, s["student_id"].upper(), s["name"]])
         ws.clear()
         ws.update(all_rows)
+        _invalidate()
     except Exception as e:
         st.error(f"Failed to save students: {e}")
 
 
-# ════════════════════════════════════════════════════════════════
-#  Weeks（週次開放設定）
-# ════════════════════════════════════════════════════════════════
+# ── Weeks ─────────────────────────────────────────────────────
 
-WEEK_FIELDS = ["semester", "week", "open", "deadline", "key_concepts"]
+@st.cache_data(ttl=30)
+def get_all_weeks(semester: str) -> List[Dict]:
+    try:
+        ss = _get_spreadsheet()
+        ws = _get_or_create_ws(ss, SHEET_WEEKS, WEEK_FIELDS)
+        return [r for r in ws.get_all_records() if r.get("semester") == semester]
+    except Exception:
+        return []
 
 
 def get_open_weeks(semester: str) -> List[Dict]:
-    """取得該學期已開放的週次（未過截止日）"""
-    all_weeks = get_all_weeks(semester)
     now = datetime.now().date()
     result = []
-    for w in all_weeks:
+    for w in get_all_weeks(semester):
         if str(w.get("open", "")).lower() not in ("true", "1", "yes"):
             continue
-        deadline_str = w.get("deadline", "")
-        if deadline_str:
+        dl = str(w.get("deadline", "")).strip()
+        if dl:
             try:
-                deadline = datetime.strptime(deadline_str, "%Y-%m-%d").date()
-                if deadline < now:
+                if datetime.strptime(dl, "%Y-%m-%d").date() < now:
                     continue
             except ValueError:
                 pass
         result.append(w)
     return result
-
-
-def get_all_weeks(semester: str) -> List[Dict]:
-    try:
-        ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_WEEKS, WEEK_FIELDS)
-        records = ws.get_all_records()
-        return [r for r in records if r.get("semester") == semester]
-    except Exception:
-        return []
 
 
 def get_week_config(semester: str, week: str) -> Optional[Dict]:
@@ -189,72 +174,59 @@ def get_week_config(semester: str, week: str) -> Optional[Dict]:
 def save_week(semester: str, week: str, open_flag: bool, deadline: str, key_concepts: str):
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_WEEKS, WEEK_FIELDS)
+        ws = _get_or_create_ws(ss, SHEET_WEEKS, WEEK_FIELDS)
         records = ws.get_all_records()
         for i, r in enumerate(records, start=2):
             if r.get("semester") == semester and str(r.get("week")) == str(week):
                 ws.update(f"A{i}:E{i}", [[semester, week, open_flag, deadline, key_concepts]])
+                _invalidate()
                 return
         ws.append_row([semester, week, open_flag, deadline, key_concepts])
+        _invalidate()
     except Exception as e:
         st.error(f"Failed to save week: {e}")
 
 
-# ════════════════════════════════════════════════════════════════
-#  Grades
-# ════════════════════════════════════════════════════════════════
+# ── Grades ────────────────────────────────────────────────────
 
-def find_record(student_id: str, week: str, semester: str) -> Optional[Dict]:
+@st.cache_data(ttl=15)
+def load_all_records(semester: str) -> List[Dict]:
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_GRADES, GRADE_FIELDS)
-        records = ws.get_all_records()
-        for r in records:
-            if (r.get("student_id", "").upper() == student_id.upper()
-                    and str(r.get("week")) == str(week)
-                    and r.get("semester") == semester):
-                return r
+        ws = _get_or_create_ws(ss, SHEET_GRADES, GRADE_FIELDS)
+        return [r for r in ws.get_all_records() if r.get("semester") == semester]
     except Exception:
-        pass
+        return []
+
+
+def find_record(student_id: str, week: str, semester: str) -> Optional[Dict]:
+    for r in load_all_records(semester):
+        if (r.get("student_id", "").upper() == student_id.upper()
+                and str(r.get("week")) == str(week)):
+            return r
     return None
 
 
 def find_all_records_for_student(student_id: str, semester: str) -> List[Dict]:
-    try:
-        ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_GRADES, GRADE_FIELDS)
-        records = ws.get_all_records()
-        return [r for r in records
-                if r.get("student_id", "").upper() == student_id.upper()
-                and r.get("semester") == semester]
-    except Exception:
-        return []
-
-
-def load_all_records(semester: str) -> List[Dict]:
-    try:
-        ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_GRADES, GRADE_FIELDS)
-        records = ws.get_all_records()
-        return [r for r in records if r.get("semester") == semester]
-    except Exception:
-        return []
+    return [r for r in load_all_records(semester)
+            if r.get("student_id", "").upper() == student_id.upper()]
 
 
 def save_record(record: Dict, overwrite: bool = False):
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_GRADES, GRADE_FIELDS)
+        ws = _get_or_create_ws(ss, SHEET_GRADES, GRADE_FIELDS)
         if overwrite:
-            records = ws.get_all_records()
-            for i, r in enumerate(records, start=2):
+            for i, r in enumerate(ws.get_all_records(), start=2):
                 if (r.get("student_id", "").upper() == record["student_id"].upper()
                         and str(r.get("week")) == str(record["week"])
                         and r.get("semester") == record["semester"]):
-                    row = [str(record.get(f, "")) for f in GRADE_FIELDS]
-                    ws.update(f"A{i}:{chr(64+len(GRADE_FIELDS))}{i}", [row])
+                    ws.update(f"A{i}:{chr(64+len(GRADE_FIELDS))}{i}",
+                              [[str(record.get(f, "")) for f in GRADE_FIELDS]])
+                    _invalidate()
                     return
         ws.append_row([str(record.get(f, "")) for f in GRADE_FIELDS])
+        _invalidate()
     except Exception as e:
         st.error(f"Failed to save record: {e}")
 
@@ -262,33 +234,29 @@ def save_record(record: Dict, overwrite: bool = False):
 def update_record(student_id: str, week: str, semester: str, updates: Dict):
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_GRADES, GRADE_FIELDS)
-        records = ws.get_all_records()
-        for i, r in enumerate(records, start=2):
+        ws = _get_or_create_ws(ss, SHEET_GRADES, GRADE_FIELDS)
+        for i, r in enumerate(ws.get_all_records(), start=2):
             if (r.get("student_id", "").upper() == student_id.upper()
                     and str(r.get("week")) == str(week)
                     and r.get("semester") == semester):
                 merged = {**r, **updates}
-                row = [str(merged.get(f, "")) for f in GRADE_FIELDS]
-                ws.update(f"A{i}:{chr(64+len(GRADE_FIELDS))}{i}", [row])
+                ws.update(f"A{i}:{chr(64+len(GRADE_FIELDS))}{i}",
+                          [[str(merged.get(f, "")) for f in GRADE_FIELDS]])
+                _invalidate()
                 return
     except Exception as e:
         st.error(f"Failed to update record: {e}")
 
 
-# ════════════════════════════════════════════════════════════════
-#  Announcements
-# ════════════════════════════════════════════════════════════════
+# ── Announcements ─────────────────────────────────────────────
 
-ANN_FIELDS = ["id", "content", "posted_at", "active"]
-
-
+@st.cache_data(ttl=60)
 def get_announcements() -> List[Dict]:
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_ANNOUNCEMENTS, ANN_FIELDS)
-        records = ws.get_all_records()
-        return [r for r in records if str(r.get("active", "")).lower() in ("true", "1", "yes")]
+        ws = _get_or_create_ws(ss, SHEET_ANNOUNCEMENTS, ANN_FIELDS)
+        return [r for r in ws.get_all_records()
+                if str(r.get("active", "")).lower() in ("true", "1", "yes")]
     except Exception:
         return []
 
@@ -296,9 +264,10 @@ def get_announcements() -> List[Dict]:
 def save_announcement(content: str):
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_ANNOUNCEMENTS, ANN_FIELDS)
-        ann_id = datetime.now().strftime("%Y%m%d%H%M%S")
-        ws.append_row([ann_id, content, datetime.now().strftime("%Y-%m-%d %H:%M"), "True"])
+        ws = _get_or_create_ws(ss, SHEET_ANNOUNCEMENTS, ANN_FIELDS)
+        ws.append_row([datetime.now().strftime("%Y%m%d%H%M%S"), content,
+                       datetime.now().strftime("%Y-%m-%d %H:%M"), "True"])
+        _invalidate()
     except Exception as e:
         st.error(f"Failed to save announcement: {e}")
 
@@ -306,51 +275,30 @@ def save_announcement(content: str):
 def deactivate_announcement(ann_id: str):
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_worksheet(ss, SHEET_ANNOUNCEMENTS, ANN_FIELDS)
-        records = ws.get_all_records()
-        for i, r in enumerate(records, start=2):
+        ws = _get_or_create_ws(ss, SHEET_ANNOUNCEMENTS, ANN_FIELDS)
+        for i, r in enumerate(ws.get_all_records(), start=2):
             if str(r.get("id")) == str(ann_id):
                 ws.update_cell(i, 4, "False")
+                _invalidate()
                 return
     except Exception as e:
-        st.error(f"Failed to deactivate announcement: {e}")
+        st.error(f"Failed to deactivate: {e}")
 
 
-# ════════════════════════════════════════════════════════════════
-#  Google Drive — PDF 上傳
-# ════════════════════════════════════════════════════════════════
+# ── Google Drive ──────────────────────────────────────────────
 
 def upload_pdf_to_drive(pdf_bytes: bytes, filename: str, semester: str, week: str) -> Optional[str]:
-    """
-    上傳 PDF 到 Google Drive，路徑：
-    根資料夾 / semester / week_XX / filename
-    回傳檔案的分享連結
-    """
     try:
         service = _get_drive_service()
-        root_folder_id = st.secrets["GOOGLE_DRIVE_FOLDER_ID"]
-
-        # 取得或建立學期資料夾
-        sem_folder_id = _get_or_create_folder(service, semester, root_folder_id)
-        # 取得或建立週次資料夾
-        week_folder_name = f"Week_{week.zfill(2)}"
-        week_folder_id = _get_or_create_folder(service, week_folder_name, sem_folder_id)
-
-        # 刪除同名舊檔（覆蓋時）
-        _delete_file_if_exists(service, filename, week_folder_id)
-
-        # 上傳新檔
-        file_metadata = {
-            "name": filename,
-            "parents": [week_folder_id],
-        }
-        media = MediaIoBaseUpload(io.BytesIO(pdf_bytes), mimetype="application/pdf")
+        root = st.secrets["GOOGLE_DRIVE_FOLDER_ID"]
+        sem_folder = _get_or_create_folder(service, semester, root)
+        week_folder = _get_or_create_folder(service, f"Week_{week.zfill(2)}", sem_folder)
+        _delete_file_if_exists(service, filename, week_folder)
         file = service.files().create(
-            body=file_metadata,
-            media_body=media,
+            body={"name": filename, "parents": [week_folder]},
+            media_body=MediaIoBaseUpload(io.BytesIO(pdf_bytes), mimetype="application/pdf"),
             fields="id, webViewLink"
         ).execute()
-
         return file.get("webViewLink", "")
     except Exception as e:
         st.warning(f"Drive upload failed: {e}")
@@ -358,23 +306,24 @@ def upload_pdf_to_drive(pdf_bytes: bytes, filename: str, semester: str, week: st
 
 
 def _get_or_create_folder(service, name: str, parent_id: str) -> str:
-    query = (f"name='{name}' and mimeType='application/vnd.google-apps.folder' "
-             f"and '{parent_id}' in parents and trashed=false")
-    results = service.files().list(q=query, fields="files(id)").execute()
+    results = service.files().list(
+        q=(f"name='{name}' and mimeType='application/vnd.google-apps.folder' "
+           f"and '{parent_id}' in parents and trashed=false"),
+        fields="files(id)"
+    ).execute()
     files = results.get("files", [])
     if files:
         return files[0]["id"]
-    metadata = {
-        "name": name,
-        "mimeType": "application/vnd.google-apps.folder",
-        "parents": [parent_id],
-    }
-    folder = service.files().create(body=metadata, fields="id").execute()
-    return folder["id"]
+    return service.files().create(
+        body={"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]},
+        fields="id"
+    ).execute()["id"]
 
 
 def _delete_file_if_exists(service, filename: str, parent_id: str):
-    query = f"name='{filename}' and '{parent_id}' in parents and trashed=false"
-    results = service.files().list(q=query, fields="files(id)").execute()
+    results = service.files().list(
+        q=f"name='{filename}' and '{parent_id}' in parents and trashed=false",
+        fields="files(id)"
+    ).execute()
     for f in results.get("files", []):
         service.files().delete(fileId=f["id"]).execute()
