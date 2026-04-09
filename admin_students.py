@@ -163,9 +163,12 @@ def render(semester: str):
              if s["student_id"].upper() == selected_id), ""
         )
         st.caption(f"Current passcode / 目前驗證碼：{'🔒 Set / 已設定' if current_pc else '— Not set / 未設定'}")
+        # 眼睛切換顯示/隱藏
+        show_pc = st.toggle("Show passcode / 顯示驗證碼", value=False, key="show_pc_toggle")
         new_pc = st.text_input(
             "New passcode / 新驗證碼（留空=取消驗證碼）",
             placeholder="e.g. 0815 (last 4 digits of birthday)",
+            type="default" if show_pc else "password",
             key="new_passcode"
         ).strip()
         if st.button("Save passcode / 儲存驗證碼", key="save_pc"):
