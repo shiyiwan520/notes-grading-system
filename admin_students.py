@@ -1,9 +1,8 @@
 """
-admin_students.py — 學生名單管理分頁
+admin_students.py — 學生名單管理（加入完整狀態提示）
 """
 import streamlit as st
 import pandas as pd
-import io
 import storage
 
 
@@ -11,12 +10,11 @@ def render(semester: str):
     st.subheader("Student List / 學生名單")
 
     if not semester:
-        st.info("Please set the current semester in Settings first.")
+        st.info("Please set the current semester in Settings first. / 請先在 Settings 設定目前學期。")
         return
 
     students = storage.get_students(semester)
 
-    # 現有名單
     if students:
         df = pd.DataFrame(students)[["student_id", "name"]]
         df.columns = ["Student ID / 學號", "Name / 姓名"]
@@ -29,7 +27,7 @@ def render(semester: str):
 
     # ── 方法1：貼上 CSV 文字 ──────────────────────────────────
     st.markdown("**Method 1: Paste CSV / 方式一：貼上 CSV 格式文字**")
-    st.caption("Format: student_id,name (one per line) / 格式：學號,姓名（每行一筆）")
+    st.caption("Format: student_id,name (one per line, no header row) / 格式：學號,姓名（每行一筆，不需要表頭）")
     csv_text = st.text_area(
         "Paste here / 貼上文字",
         placeholder="M1344001,王小明\nM1344002,陳美麗\nM1344003,John Smith",
@@ -37,33 +35,56 @@ def render(semester: str):
         key="csv_paste"
     )
     if st.button("Import from text / 從文字匯入", key="import_text"):
-        parsed = _parse_csv_text(csv_text)
-        if parsed:
-            storage.save_students(semester, parsed)
-            st.success(f"Imported {len(parsed)} students. / 已匯入 {len(parsed)} 名學生。")
-            st.rerun()
+        if not csv_text.strip():
+            st.error("Please paste some content first. / 請先貼上內容。")
         else:
-            st.error("Could not parse CSV. Check format. / 無法解析，請確認格式。")
+            with st.spinner("Importing students... / 匯入學生名單中，請稍候..."):
+                parsed = _parse_csv_text(csv_text)
+            if parsed:
+                with st.spinner(f"Saving {len(parsed)} students to cloud... / 正在儲存 {len(parsed)} 名學生到雲端..."):
+                    storage.save_students(semester, parsed)
+                st.success(f"✅ Successfully imported {len(parsed)} students! / 成功匯入 {len(parsed)} 名學生！")
+                st.info("Page will refresh in a moment... / 頁面即將更新...")
+                st.rerun()
+            else:
+                st.error(
+                    "Could not parse. Make sure format is correct (no header row). / "
+                    "無法解析，請確認格式正確且沒有表頭列。"
+                )
 
     st.divider()
 
     # ── 方法2：上傳 CSV 檔案 ──────────────────────────────────
     st.markdown("**Method 2: Upload CSV file / 方式二：上傳 CSV 檔案**")
+    st.caption("CSV should have no header row. Two columns: student_id, name / CSV 不需要表頭，兩欄：學號、姓名")
     uploaded = st.file_uploader("Upload CSV / 上傳 CSV", type=["csv"], key="csv_upload")
-    if uploaded and st.button("Import from file / 從檔案匯入", key="import_file"):
-        try:
-            df_upload = pd.read_csv(uploaded, header=None, names=["student_id", "name"])
-            parsed = df_upload.dropna().to_dict("records")
-            parsed = [{"student_id": str(r["student_id"]).strip().upper(),
-                       "name": str(r["name"]).strip()} for r in parsed if r["student_id"] and r["name"]]
+    if uploaded:
+        if st.button("Import from file / 從檔案匯入", key="import_file"):
+            with st.spinner("Reading file... / 讀取檔案中..."):
+                try:
+                    df_upload = pd.read_csv(uploaded, header=None, names=["student_id", "name"])
+                    parsed = df_upload.dropna().to_dict("records")
+                    parsed = [
+                        {"student_id": str(r["student_id"]).strip().upper(),
+                         "name": str(r["name"]).strip()}
+                        for r in parsed
+                        if str(r["student_id"]).strip() not in ("", "student_id")
+                        and str(r["name"]).strip() not in ("", "name")
+                    ]
+                except Exception as e:
+                    st.error(f"Failed to read file: {e} / 讀取檔案失敗：{e}")
+                    return
+
             if parsed:
-                storage.save_students(semester, parsed)
-                st.success(f"Imported {len(parsed)} students.")
+                with st.spinner(f"Saving {len(parsed)} students to cloud... / 正在儲存 {len(parsed)} 名學生到雲端..."):
+                    storage.save_students(semester, parsed)
+                st.success(f"✅ Successfully imported {len(parsed)} students! / 成功匯入 {len(parsed)} 名學生！")
                 st.rerun()
             else:
-                st.error("No valid rows found.")
-        except Exception as e:
-            st.error(f"Error: {e}")
+                st.error(
+                    "No valid rows found. Check that the file has no header and uses format: student_id,name / "
+                    "找不到有效資料，請確認檔案無表頭且格式為：學號,姓名"
+                )
 
     st.divider()
 
@@ -78,35 +99,44 @@ def render(semester: str):
         st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
         if st.button("Add / 新增", key="add_one"):
             if new_id and new_name:
-                existing = storage.get_students(semester)
-                if any(s["student_id"].upper() == new_id for s in existing):
-                    st.warning("Student ID already exists. / 學號已存在。")
-                else:
-                    existing.append({"student_id": new_id, "name": new_name})
-                    storage.save_students(semester, existing)
-                    st.success("Added! / 已新增！")
-                    st.rerun()
+                with st.spinner("Checking and saving... / 檢查並儲存中..."):
+                    existing = storage.get_students(semester)
+                    if any(s["student_id"].upper() == new_id for s in existing):
+                        st.warning("⚠️ Student ID already exists. / 學號已存在。")
+                    else:
+                        existing.append({"student_id": new_id, "name": new_name})
+                        storage.save_students(semester, existing)
+                        st.success(f"✅ Added {new_id} {new_name}! / 已新增！")
+                        st.rerun()
             else:
                 st.error("Please fill in both fields. / 請填寫學號與姓名。")
 
-    # ── CSV 範本下載 ──────────────────────────────────────────
     st.divider()
-    template = "student_id,name\nM1344001,王小明\nM1344002,John Smith\n"
+
+    # ── CSV 範本下載 ──────────────────────────────────────────
+    template = "M1344001,王小明\nM1344002,陳美麗\nM1344003,John Smith\n"
     st.download_button(
-        "📥 Download CSV template / 下載 CSV 範本",
+        "📥 Download CSV template / 下載 CSV 範本（無表頭格式）",
         data=template.encode("utf-8-sig"),
         file_name="students_template.csv",
         mime="text/csv"
     )
+    st.caption("Note: Template has NO header row. / 注意：範本無表頭列，直接填學號和姓名。")
 
 
 def _parse_csv_text(text: str):
     result = []
     for line in text.strip().splitlines():
-        parts = line.strip().split(",", 1)
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(",", 1)
         if len(parts) == 2:
             sid = parts[0].strip().upper()
             name = parts[1].strip()
+            # 跳過表頭列
+            if sid.lower() in ("student_id", "學號", "id") or name.lower() in ("name", "姓名"):
+                continue
             if sid and name:
                 result.append({"student_id": sid, "name": name})
     return result
