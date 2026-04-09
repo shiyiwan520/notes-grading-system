@@ -24,8 +24,11 @@ def render(settings: dict):
         st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
         if st.button("Save / 儲存", key="save_sem"):
             if new_sem.strip():
-                storage.save_setting("current_semester", new_sem.strip())
-                st.success("Saved! / 已儲存！")
+                with st.spinner("Saving semester... / 儲存學期中..."):
+                    storage.save_setting("current_semester", new_sem.strip())
+                    if "settings_cache" in st.session_state:
+                        st.session_state.settings_cache["current_semester"] = new_sem.strip()
+                st.success("✅ Semester saved! / 學期已儲存！")
                 st.rerun()
 
     # 歷史學期切換（唯讀查看）
