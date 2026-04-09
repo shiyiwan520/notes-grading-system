@@ -1,0 +1,9 @@
+streamlit>=1.35.0
+google-generativeai>=0.7.0
+gspread>=6.0.0
+google-auth>=2.28.0
+google-api-python-client>=2.120.0
+pdfplumber>=0.11.0
+PyMuPDF>=1.24.0
+pandas>=2.0.0
+python-dotenv>=1.0.0
