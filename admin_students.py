@@ -64,26 +64,54 @@ def render(semester: str):
     uploaded = st.file_uploader("Upload CSV / 上傳 CSV", type=["csv"], key="csv_upload")
     if uploaded:
         if st.button("Import from file / 從檔案匯入", key="import_file"):
-            with st.spinner("Reading file... / 讀取檔案中..."):
-                try:
-                    df_up = pd.read_csv(uploaded, header=None, names=["student_id", "name"], encoding="utf-8-sig")
-                    parsed = [
-                        {"student_id": str(r["student_id"]).strip().upper(),
-                         "name": str(r["name"]).strip()}
-                        for _, r in df_up.dropna().iterrows()
-                        if str(r["student_id"]).strip() not in ("", "student_id")
-                        and str(r["name"]).strip() not in ("", "name")
-                    ]
-                except Exception as e:
-                    st.error(f"Failed to read file: {e}")
+            try:
+                with st.spinner("Reading file... / 讀取檔案中..."):
+                    raw = uploaded.read()
+                    # 嘗試多種編碼
+                    for enc in ["utf-8-sig", "utf-8", "big5", "cp950"]:
+                        try:
+                            text = raw.decode(enc)
+                            break
+                        except Exception:
+                            text = None
+                    if not text:
+                        st.error("Cannot decode file. Please save CSV as UTF-8. / 無法解碼檔案，請將 CSV 儲存為 UTF-8 格式。")
+                        st.stop()
+
+                    # 移除 BOM
+                    text = text.lstrip("\ufeff").strip()
                     parsed = []
-            if parsed:
-                with st.spinner(f"Saving {len(parsed)} students... / 儲存中..."):
-                    storage.save_students(semester, parsed)
-                st.success(f"✅ Imported {len(parsed)} students!")
-                st.rerun()
-            else:
-                st.error("No valid rows found. / 找不到有效資料。")
+                    errors = []
+                    for i, line in enumerate(text.splitlines(), start=1):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        parts = line.split(",", 1)
+                        if len(parts) != 2:
+                            errors.append(f"Row {i}: cannot parse '{line}'")
+                            continue
+                        sid = parts[0].strip().upper()
+                        name = parts[1].strip()
+                        if sid.lower() in ("student_id", "學號", "id"):
+                            continue
+                        if sid and name:
+                            parsed.append({"student_id": sid, "name": name, "passcode": ""})
+
+                if errors:
+                    st.warning(f"Skipped {len(errors)} invalid row(s): {'; '.join(errors[:3])}")
+
+                if parsed:
+                    with st.spinner(f"Saving {len(parsed)} students... / 儲存 {len(parsed)} 名學生到雲端..."):
+                        storage.save_students(semester, parsed)
+                    st.success(f"✅ Imported {len(parsed)} students! / 成功匯入 {len(parsed)} 名學生！")
+                    st.rerun()
+                else:
+                    st.error(
+                        "No valid rows found. Make sure format is: student_id,name (no header, comma separated).\n"
+                        "找不到有效資料。請確認格式為：學號,姓名（無表頭，逗號分隔）。"
+                    )
+            except Exception as e:
+                st.error(f"Import failed / 匯入失敗：{e}")
 
     st.divider()
 
