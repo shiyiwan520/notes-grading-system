@@ -359,16 +359,29 @@ def upload_pdf(
 
     try:
         sb = _get_supabase()
-        sb.storage.from_(SUPABASE_BUCKET).upload(
+        # 上傳檔案
+        upload_resp = sb.storage.from_(SUPABASE_BUCKET).upload(
             path=storage_path,
             file=pdf_bytes,
             file_options={"content-type": "application/pdf", "upsert": "false"},
         )
         # 產生 signed URL（有效期 1 年）
-        signed = sb.storage.from_(SUPABASE_BUCKET).create_signed_url(
-            storage_path, expires_in=365 * 24 * 3600
-        )
-        file_url = signed.get("signedURL", "") or signed.get("signed_url", "")
+        try:
+            signed = sb.storage.from_(SUPABASE_BUCKET).create_signed_url(
+                storage_path, expires_in=365 * 24 * 3600
+            )
+            # 新版 supabase-py 回傳格式不同，嘗試多種 key
+            file_url = (
+                signed.get("signedURL")
+                or signed.get("signed_url")
+                or signed.get("signedUrl")
+                or ""
+            )
+        except Exception as sign_err:
+            # signed URL 失敗不阻止繳交，只是連結空白
+            file_url = ""
+            st.warning(f"PDF uploaded but signed URL failed: {sign_err}")
+
         return {
             "success": True,
             "storage_path": storage_path,
@@ -377,12 +390,15 @@ def upload_pdf(
             "error": "",
         }
     except Exception as e:
+        error_detail = str(e)
+        # 顯示詳細錯誤給老師端 debug 用
+        st.warning(f"[Debug] Supabase upload error: {error_detail[:200]}")
         return {
             "success": False,
             "storage_path": "",
             "file_url": "",
             "file_size_bytes": len(pdf_bytes),
-            "error": str(e),
+            "error": error_detail,
         }
 
 
