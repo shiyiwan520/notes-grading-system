@@ -1,5 +1,5 @@
 """
-admin_students.py — 學生名單管理（加入完整狀態提示）
+admin_students.py — 學生名單管理（含驗證碼設定）
 """
 import streamlit as st
 import pandas as pd
@@ -16,8 +16,14 @@ def render(semester: str):
     students = storage.get_students(semester)
 
     if students:
-        df = pd.DataFrame(students)[["student_id", "name"]]
-        df.columns = ["Student ID / 學號", "Name / 姓名"]
+        df = pd.DataFrame(students)
+        show_cols = ["student_id", "name", "passcode"]
+        for c in show_cols:
+            if c not in df.columns:
+                df[c] = ""
+        df = df[show_cols]
+        df["passcode"] = df["passcode"].apply(lambda x: "🔒 Set" if str(x).strip() else "—")
+        df.columns = ["Student ID / 學號", "Name / 姓名", "Passcode / 驗證碼"]
         st.dataframe(df, use_container_width=True, hide_index=True)
         st.caption(f"Total: {len(students)} students / 共 {len(students)} 名學生")
     else:
@@ -27,7 +33,10 @@ def render(semester: str):
 
     # ── 方法1：貼上 CSV 文字 ──────────────────────────────────
     st.markdown("**Method 1: Paste CSV / 方式一：貼上 CSV 格式文字**")
-    st.caption("Format: student_id,name (one per line, no header row) / 格式：學號,姓名（每行一筆，不需要表頭）")
+    st.caption(
+        "Format: student_id,name (no header) / 格式：學號,姓名（每行一筆，不需要表頭）  \n"
+        "Passcode can be added later below. / 驗證碼可以事後在下方單獨設定。"
+    )
     csv_text = st.text_area(
         "Paste here / 貼上文字",
         placeholder="M1344001,王小明\nM1344002,陳美麗\nM1344003,John Smith",
@@ -38,53 +47,43 @@ def render(semester: str):
         if not csv_text.strip():
             st.error("Please paste some content first. / 請先貼上內容。")
         else:
-            with st.spinner("Importing students... / 匯入學生名單中，請稍候..."):
+            with st.spinner("Importing... / 匯入中..."):
                 parsed = _parse_csv_text(csv_text)
             if parsed:
-                with st.spinner(f"Saving {len(parsed)} students to cloud... / 正在儲存 {len(parsed)} 名學生到雲端..."):
+                with st.spinner(f"Saving {len(parsed)} students... / 儲存 {len(parsed)} 名學生到雲端..."):
                     storage.save_students(semester, parsed)
-                st.success(f"✅ Successfully imported {len(parsed)} students! / 成功匯入 {len(parsed)} 名學生！")
-                st.info("Page will refresh in a moment... / 頁面即將更新...")
+                st.success(f"✅ Imported {len(parsed)} students! / 成功匯入 {len(parsed)} 名學生！")
                 st.rerun()
             else:
-                st.error(
-                    "Could not parse. Make sure format is correct (no header row). / "
-                    "無法解析，請確認格式正確且沒有表頭列。"
-                )
+                st.error("Could not parse. Check format (no header). / 無法解析，請確認格式且無表頭。")
 
     st.divider()
 
     # ── 方法2：上傳 CSV 檔案 ──────────────────────────────────
     st.markdown("**Method 2: Upload CSV file / 方式二：上傳 CSV 檔案**")
-    st.caption("CSV should have no header row. Two columns: student_id, name / CSV 不需要表頭，兩欄：學號、姓名")
     uploaded = st.file_uploader("Upload CSV / 上傳 CSV", type=["csv"], key="csv_upload")
     if uploaded:
         if st.button("Import from file / 從檔案匯入", key="import_file"):
             with st.spinner("Reading file... / 讀取檔案中..."):
                 try:
-                    df_upload = pd.read_csv(uploaded, header=None, names=["student_id", "name"])
-                    parsed = df_upload.dropna().to_dict("records")
+                    df_up = pd.read_csv(uploaded, header=None, names=["student_id", "name"])
                     parsed = [
                         {"student_id": str(r["student_id"]).strip().upper(),
                          "name": str(r["name"]).strip()}
-                        for r in parsed
+                        for _, r in df_up.dropna().iterrows()
                         if str(r["student_id"]).strip() not in ("", "student_id")
                         and str(r["name"]).strip() not in ("", "name")
                     ]
                 except Exception as e:
-                    st.error(f"Failed to read file: {e} / 讀取檔案失敗：{e}")
-                    return
-
+                    st.error(f"Failed to read file: {e}")
+                    parsed = []
             if parsed:
-                with st.spinner(f"Saving {len(parsed)} students to cloud... / 正在儲存 {len(parsed)} 名學生到雲端..."):
+                with st.spinner(f"Saving {len(parsed)} students... / 儲存中..."):
                     storage.save_students(semester, parsed)
-                st.success(f"✅ Successfully imported {len(parsed)} students! / 成功匯入 {len(parsed)} 名學生！")
+                st.success(f"✅ Imported {len(parsed)} students!")
                 st.rerun()
             else:
-                st.error(
-                    "No valid rows found. Check that the file has no header and uses format: student_id,name / "
-                    "找不到有效資料，請確認檔案無表頭且格式為：學號,姓名"
-                )
+                st.error("No valid rows found. / 找不到有效資料。")
 
     st.divider()
 
@@ -99,29 +98,64 @@ def render(semester: str):
         st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
         if st.button("Add / 新增", key="add_one"):
             if new_id and new_name:
-                with st.spinner("Checking and saving... / 檢查並儲存中..."):
+                with st.spinner("Saving... / 儲存中..."):
                     existing = storage.get_students(semester)
                     if any(s["student_id"].upper() == new_id for s in existing):
                         st.warning("⚠️ Student ID already exists. / 學號已存在。")
                     else:
-                        existing.append({"student_id": new_id, "name": new_name})
+                        existing.append({"student_id": new_id, "name": new_name, "passcode": ""})
                         storage.save_students(semester, existing)
-                        st.success(f"✅ Added {new_id} {new_name}! / 已新增！")
+                        st.success(f"✅ Added {new_id} {new_name}!")
                         st.rerun()
             else:
                 st.error("Please fill in both fields. / 請填寫學號與姓名。")
 
     st.divider()
 
+    # ── 驗證碼管理 ────────────────────────────────────────────
+    st.markdown("**Passcode Management / 驗證碼管理**")
+    st.caption(
+        "Students who want grade privacy can provide a passcode to the teacher.  \n"
+        "想保護成績隱私的學生可私下告知老師驗證碼，設定後查詢成績時需輸入才能看到。  \n"
+        "Leave blank to remove passcode. / 留空可取消驗證碼。"
+    )
+
+    if students:
+        student_options = [f"{s['student_id']} — {s['name']}" for s in students]
+        selected = st.selectbox("Select student / 選擇學生", student_options, key="passcode_student")
+        selected_id = selected.split(" — ")[0]
+        current_pc = next(
+            (str(s.get("passcode","")).strip() for s in students
+             if s["student_id"].upper() == selected_id), ""
+        )
+        st.caption(f"Current passcode / 目前驗證碼：{'🔒 Set / 已設定' if current_pc else '— Not set / 未設定'}")
+        new_pc = st.text_input(
+            "New passcode / 新驗證碼（留空=取消驗證碼）",
+            placeholder="e.g. 0815 (last 4 digits of birthday)",
+            key="new_passcode"
+        ).strip()
+        if st.button("Save passcode / 儲存驗證碼", key="save_pc"):
+            with st.spinner("Saving... / 儲存中..."):
+                ok = storage.update_student_passcode(semester, selected_id, new_pc)
+            if ok:
+                if new_pc:
+                    st.success(f"✅ Passcode set for {selected_id}. / 已設定驗證碼！")
+                else:
+                    st.success(f"✅ Passcode removed for {selected_id}. / 已取消驗證碼！")
+                st.rerun()
+            else:
+                st.error("Failed to save. / 儲存失敗。")
+
+    st.divider()
+
     # ── CSV 範本下載 ──────────────────────────────────────────
     template = "M1344001,王小明\nM1344002,陳美麗\nM1344003,John Smith\n"
     st.download_button(
-        "📥 Download CSV template / 下載 CSV 範本（無表頭格式）",
+        "📥 Download CSV template / 下載 CSV 範本",
         data=template.encode("utf-8-sig"),
         file_name="students_template.csv",
         mime="text/csv"
     )
-    st.caption("Note: Template has NO header row. / 注意：範本無表頭列，直接填學號和姓名。")
 
 
 def _parse_csv_text(text: str):
@@ -134,9 +168,8 @@ def _parse_csv_text(text: str):
         if len(parts) == 2:
             sid = parts[0].strip().upper()
             name = parts[1].strip()
-            # 跳過表頭列
             if sid.lower() in ("student_id", "學號", "id") or name.lower() in ("name", "姓名"):
                 continue
             if sid and name:
-                result.append({"student_id": sid, "name": name})
+                result.append({"student_id": sid, "name": name, "passcode": ""})
     return result

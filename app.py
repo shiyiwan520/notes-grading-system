@@ -280,12 +280,35 @@ elif page == "🔍 Check Grade / 查詢成績":
     settings = storage.get_settings()
     current_semester = settings.get("current_semester", "")
 
-    q_id = st.text_input("Student ID / 學號", placeholder="e.g. M1344022").strip().upper()
+    q_id = st.text_input(
+        "Student ID / 學號",
+        placeholder="e.g. M1344022"
+    ).strip().upper()
+
+    q_passcode = st.text_input(
+        "Passcode / 驗證碼（if set / 若有設定）",
+        placeholder="Leave blank if not set / 未設定請留空",
+        type="password"
+    ).strip()
 
     if st.button("Search / 查詢", type="primary"):
         if not q_id:
             st.warning("Please enter your Student ID. / 請輸入學號。")
         else:
+            # 驗證碼檢查
+            students = storage.get_students(current_semester)
+            student_info = next(
+                (s for s in students if s.get("student_id", "").upper() == q_id),
+                None
+            )
+            stored_passcode = str(student_info.get("passcode", "")).strip() if student_info else ""
+
+            if stored_passcode and q_passcode != stored_passcode:
+                st.error(
+                    "Incorrect passcode. / 驗證碼錯誤，請確認後再試。"
+                )
+                st.stop()
+
             records = storage.find_all_records_for_student(q_id, current_semester)
             if not records:
                 st.error(

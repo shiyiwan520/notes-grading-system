@@ -106,11 +106,14 @@ def save_setting(key: str, value: str):
 
 # ── Students ──────────────────────────────────────────────────
 
+STUDENT_FIELDS = ["semester", "student_id", "name", "passcode"]
+
+
 @st.cache_data(ttl=30)
 def get_students(semester: str) -> List[Dict]:
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_ws(ss, SHEET_STUDENTS, ["semester", "student_id", "name"])
+        ws = _get_or_create_ws(ss, SHEET_STUDENTS, STUDENT_FIELDS)
         return [r for r in ws.get_all_records()
                 if r.get("semester") == semester
                 and str(r.get("student_id", "")).strip() not in ("", "student_id")]
@@ -121,18 +124,37 @@ def get_students(semester: str) -> List[Dict]:
 def save_students(semester: str, students: List[Dict]):
     try:
         ss = _get_spreadsheet()
-        ws = _get_or_create_ws(ss, SHEET_STUDENTS, ["semester", "student_id", "name"])
+        ws = _get_or_create_ws(ss, SHEET_STUDENTS, STUDENT_FIELDS)
         other = [r for r in ws.get_all_records() if r.get("semester") != semester]
-        all_rows = [["semester", "student_id", "name"]]
+        all_rows = [STUDENT_FIELDS]
         for r in other:
-            all_rows.append([r["semester"], r["student_id"], r["name"]])
+            all_rows.append([r.get("semester",""), r.get("student_id",""),
+                             r.get("name",""), r.get("passcode","")])
         for s in students:
-            all_rows.append([semester, s["student_id"].upper(), s["name"]])
+            all_rows.append([semester, s["student_id"].upper(),
+                             s["name"], s.get("passcode","")])
         ws.clear()
         ws.update(all_rows)
         _invalidate()
     except Exception as e:
         st.error(f"Failed to save students: {e}")
+
+
+def update_student_passcode(semester: str, student_id: str, passcode: str):
+    try:
+        ss = _get_spreadsheet()
+        ws = _get_or_create_ws(ss, SHEET_STUDENTS, STUDENT_FIELDS)
+        records = ws.get_all_records()
+        for i, r in enumerate(records, start=2):
+            if (r.get("semester") == semester
+                    and r.get("student_id","").upper() == student_id.upper()):
+                ws.update_cell(i, 4, passcode)
+                _invalidate()
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Failed to update passcode: {e}")
+        return False
 
 
 # ── Weeks ─────────────────────────────────────────────────────
@@ -160,7 +182,9 @@ def get_open_weeks(semester: str) -> List[Dict]:
                     continue
             except ValueError:
                 pass
-        result.append(w)
+        w_copy = dict(w)
+        w_copy["week"] = str(w_copy.get("week", "")).zfill(2)
+        result.append(w_copy)
     return result
 
 
@@ -292,7 +316,7 @@ def upload_pdf_to_drive(pdf_bytes: bytes, filename: str, semester: str, week: st
         service = _get_drive_service()
         root = st.secrets["GOOGLE_DRIVE_FOLDER_ID"]
         sem_folder = _get_or_create_folder(service, semester, root)
-        week_folder = _get_or_create_folder(service, f"Week_{week.zfill(2)}", sem_folder)
+        week_folder = _get_or_create_folder(service, f"Week_{str(week).zfill(2)}", sem_folder)
         _delete_file_if_exists(service, filename, week_folder)
         file = service.files().create(
             body={"name": filename, "parents": [week_folder]},
