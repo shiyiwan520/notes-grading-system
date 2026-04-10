@@ -27,6 +27,8 @@ if "admin_logged_in" not in st.session_state:
     st.session_state.admin_logged_in = False
 if "confirm_overwrite" not in st.session_state:
     st.session_state.confirm_overwrite = False
+if "pending_overwrite" not in st.session_state:
+    st.session_state.pending_overwrite = None
 
 # ── 側邊欄導覽 ────────────────────────────────────────────────
 st.sidebar.title("📝 Navigation / 導覽")
@@ -54,20 +56,33 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
     任一步驟失敗都停止，不顯示假成功。
     """
     existing = storage.find_record(student_id, week, semester)
+
+    # 若成績已公開 → 鎖定，不允許再繳交
+    if existing and str(existing.get("released","")).lower() in ("true","1","yes"):
+        st.error(
+            "Your grade for Week " + str(week) + " has already been released. "
+            "Resubmission is not allowed after grading is complete.\n"
+            "您本週的成績已公開，批改完成後不允許再次繳交。"
+        )
+        return
+
+    # 若已有紀錄且尚未確認覆蓋 → 顯示確認畫面並停止
     if existing and not st.session_state.confirm_overwrite:
         st.warning(
             "You have already submitted for Week " + str(week) + ". Submitting again will replace your previous submission.\n"
             "您本週已有繳交紀錄，重新繳交將取代上一份作業。"
         )
-        if st.button("Yes, resubmit / 確認，重新繳交", key="overwrite_btn", type="primary"):
-            st.session_state.confirm_overwrite = True
-            # 不 rerun，直接繼續往下執行
-        else:
-            return  # 未確認則停止
+        st.session_state.pending_overwrite = {
+            "student_id": student_id,
+            "student_name": student_name,
+            "week": week,
+            "semester": semester,
+            "is_late": is_late,
+        }
+        st.info("Please click the button below to confirm resubmission. / 請點下方按鈕確認重新繳交。")
+        return  # 停止，等待用戶在主頁面按確認按鈕
 
-    if not st.session_state.confirm_overwrite:
-        return
-
+    # 確認覆蓋後清除 flag
     st.session_state.confirm_overwrite = False
 
     # 步驟1：讀取並驗證檔案大小
@@ -322,6 +337,26 @@ if page == "📤 Submit Notes / 繳交作業":
 
     # ── 正式繳交按鈕 ──────────────────────────────────────────
     submit_btn = st.button("📤 Submit / 繳交", type="primary", use_container_width=True)
+
+    # ── 重新繳交確認按鈕（顯示在 Submit 按鈕下方）──────────────
+    pending = st.session_state.get("pending_overwrite")
+    if pending and uploaded_file:
+        st.warning(
+            "You have already submitted for Week " + str(pending["week"]) + ". "
+            "Click below to confirm resubmission.\n"
+            "您本週已有繳交紀錄，請按下方按鈕確認重新繳交。"
+        )
+        if st.button("✅ Yes, resubmit now / 確認重新繳交", key="confirm_resubmit_btn", type="primary"):
+            st.session_state.confirm_overwrite = True
+            st.session_state.pending_overwrite = None
+            _process_submission(
+                pending["student_id"], pending["student_name"],
+                pending["week"], pending["semester"],
+                uploaded_file, is_late=pending["is_late"]
+            )
+        if st.button("Cancel / 取消", key="cancel_resubmit_btn"):
+            st.session_state.pending_overwrite = None
+            st.rerun()
 
     if submit_btn:
         errors = []
