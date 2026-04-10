@@ -57,7 +57,7 @@ Respond ONLY with valid JSON, no markdown fences, no extra text:
 def _get_model():
     api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
     genai.configure(api_key=api_key)
-    return genai.GenerativeModel("gemini-2.5-flash")
+    return genai.GenerativeModel("gemini-1.5-flash")
 
 
 def grade(text: str, key_concepts: str = "") -> Tuple[int, str, bool]:
