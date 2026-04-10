@@ -11,6 +11,11 @@ import storage
 def render(semester: str):
     st.subheader(f"Dashboard — {semester or 'No semester selected'}")
 
+    # 重新整理按鈕：清快取強制讀取最新資料
+    if st.button("🔄 Refresh data / 重新整理資料", key="dashboard_refresh"):
+        st.cache_data.clear()
+        st.rerun()
+
     if not semester:
         st.info("Please set the current semester in Settings.")
         return

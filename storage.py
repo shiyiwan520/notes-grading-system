@@ -126,7 +126,7 @@ def save_setting(key: str, value: str):
 STUDENT_FIELDS = ["semester", "student_id", "name", "passcode"]
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=5)
 def get_students(semester: str) -> List[Dict]:
     try:
         ss = _get_spreadsheet()
@@ -186,7 +186,7 @@ def update_student_passcode(semester: str, student_id: str, passcode: str):
 
 # ── Weeks ─────────────────────────────────────────────────────
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=5)
 def get_all_weeks(semester: str) -> List[Dict]:
     try:
         ss = _get_spreadsheet()
@@ -240,7 +240,7 @@ def save_week(semester: str, week: str, open_flag: bool, deadline: str, key_conc
 
 # ── Grades ────────────────────────────────────────────────────
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=5)
 def load_all_records(semester: str) -> List[Dict]:
     try:
         ss = _get_spreadsheet()

@@ -20,6 +20,11 @@ def render(semester: str):
         st.info("Please set the current semester in Settings first.")
         return
 
+    # 重新整理按鈕
+    if st.button("🔄 Refresh data / 重新整理資料", key="grading_refresh"):
+        st.cache_data.clear()
+        st.rerun()
+
     records = storage.load_all_records(semester)
     if not records:
         st.info("No submissions yet.")
