@@ -74,7 +74,18 @@ def grade(text: str, key_concepts: str = "") -> Tuple[int, str, bool]:
             "Specifically check whether these concepts appear in the student's notes."
         )
 
-    sample_text = text[:4000]
+    # 均勻抽樣：取開頭 + 中間 + 結尾，避免只評到目錄頁
+    if len(text) <= 8000:
+        sample_text = text
+    else:
+        mid = len(text) // 2
+        sample_text = (
+            text[:3000]
+            + "\n\n[... middle section ...]\n\n"
+            + text[mid-1500:mid+1500]
+            + "\n\n[... end section ...]\n\n"
+            + text[-2000:]
+        )
     user_msg = f"Grade the following student English notes:\n\n---\n{sample_text}\n---"
 
     try:
