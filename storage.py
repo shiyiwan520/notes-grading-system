@@ -247,10 +247,17 @@ def load_all_records(semester: str) -> List[Dict]:
 
 
 def find_record(student_id: str, week: str, semester: str) -> Optional[Dict]:
-    for r in load_all_records(semester):
-        if (r.get("student_id", "").upper() == student_id.upper()
-                and str(r.get("week")) == str(week)):
-            return r
+    """即時查詢，不使用快取，確保覆蓋確認的準確性"""
+    try:
+        ss = _get_spreadsheet()
+        ws = _get_or_create_ws(ss, SHEET_GRADES, GRADE_FIELDS)
+        for r in ws.get_all_records():
+            if (r.get("semester") == semester
+                    and r.get("student_id", "").upper() == student_id.upper()
+                    and str(r.get("week")) == str(week)):
+                return r
+    except Exception:
+        pass
     return None
 
 

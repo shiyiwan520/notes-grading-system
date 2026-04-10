@@ -402,10 +402,17 @@ elif page == "🔍 Check Grade / 查詢成績":
                     late_tag = "  📨 Late / 補交" if is_late else ""
 
                     with st.expander(f"Week {week}{late_tag}  —  {'Grade released / 成績已公開 ✅' if released else 'Pending / 待公開 🔒'}"):
+                        orig_name = rec.get("original_filename") or rec.get("filename","")
+                        file_size = rec.get("file_size_bytes","")
+                        size_str = f"{round(int(file_size)/1024, 1)} KB" if str(file_size).isdigit() else ""
                         st.markdown(f"**Submitted at / 繳交時間：** {rec.get('submitted_at', '')}")
+                        if orig_name:
+                            st.markdown(f"**File / 檔案：** {orig_name}  {size_str}")
+                        if str(rec.get("replaced_previous","")).lower() in ("true","1"):
+                            st.caption("This is a resubmission. / 本次為重新繳交。")
                         if released:
                             final = rec.get("final_score") or rec.get("ai_score")
-                            st.markdown(f"**Grade / 成績：** {final} / 7")
+                            st.markdown(f"**Grade / 成績：** {final} / 5")
                             st.markdown(f"**Feedback / 評語：**  \n{rec.get('ai_justification', '')}")
                         else:
                             st.info(
