@@ -25,10 +25,12 @@ st.set_page_config(
 
 if "admin_logged_in" not in st.session_state:
     st.session_state.admin_logged_in = False
-if "confirm_overwrite" not in st.session_state:
-    st.session_state.confirm_overwrite = False
-if "pending_overwrite" not in st.session_state:
-    st.session_state.pending_overwrite = None
+# overwrite_ready: 第一次按 Submit 發現重複時設為 True，第二次按就直接覆蓋
+if "overwrite_ready" not in st.session_state:
+    st.session_state.overwrite_ready = False
+# overwrite_week: 記住是哪一週觸發了覆蓋確認（避免換週次後誤觸）
+if "overwrite_week" not in st.session_state:
+    st.session_state.overwrite_week = None
 
 # ── 側邊欄導覽 ────────────────────────────────────────────────
 st.sidebar.title("📝 Navigation / 導覽")
@@ -54,6 +56,7 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
     安全繳交流程：
     1. 大小驗證  2. 上傳 Supabase  3. AI 評分  4. 寫 Sheets  5. 刪舊檔  6. 顯示成功
     任一步驟失敗都停止，不顯示假成功。
+    重複繳交：第一次按 Submit 顯示警告（overwrite_ready=True），第二次按直接覆蓋。
     """
     existing = storage.find_record(student_id, week, semester)
 
@@ -66,31 +69,20 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
         )
         return
 
-    # 若已有紀錄且尚未確認覆蓋 → 把 PDF bytes 存進 session_state，顯示確認畫面並停止
-    if existing and not st.session_state.confirm_overwrite:
-        # 在這裡讀取並暫存 PDF bytes，避免確認後頁面重整時 file_uploader 清空
-        try:
-            pdf_bytes_temp = uploaded_file.read()
-            st.session_state.pending_overwrite = {
-                "student_id": student_id,
-                "student_name": student_name,
-                "week": week,
-                "semester": semester,
-                "is_late": is_late,
-                "pdf_bytes": pdf_bytes_temp,
-                "original_filename": uploaded_file.name,
-                "file_size": len(pdf_bytes_temp),
-            }
-        except Exception:
-            pass
+    # 若已有紀錄且這是「第一次」按 Submit（尚未確認覆蓋）→ 顯示警告，記住 flag，停止
+    if existing and not (st.session_state.overwrite_ready and st.session_state.overwrite_week == week):
+        st.session_state.overwrite_ready = True
+        st.session_state.overwrite_week = week
         st.warning(
-            "You have already submitted for Week " + str(week) + ". Submitting again will replace your previous submission.\n"
-            "您本週已有繳交紀錄，重新繳交將取代上一份作業。"
+            "⚠️ You have already submitted for Week " + str(week) + ". "
+            "**Click Submit again to confirm replacing your previous submission.**\n\n"
+            "您本週已有繳交紀錄。**請再按一次「繳交」按鈕，即可覆蓋舊作業。**"
         )
-        return  # 停止，等待 pending_overwrite UI 顯示確認按鈕
+        return  # 停止。下次按 Submit，overwrite_ready==True，直接通過
 
-    # 確認覆蓋後清除 flag
-    st.session_state.confirm_overwrite = False
+    # 第二次按到這裡：重置 flag，繼續正常流程
+    st.session_state.overwrite_ready = False
+    st.session_state.overwrite_week = None
 
     # 步驟1：讀取並驗證檔案大小
     pdf_bytes = uploaded_file.read()
@@ -344,56 +336,33 @@ if page == "📤 Submit Notes / 繳交作業":
                     )
 
     # ── 正式繳交按鈕 ──────────────────────────────────────────
-    pending = st.session_state.get("pending_overwrite")
+    # 若目前處於「等待覆蓋確認」狀態，按鈕文字改變，提醒用戶再按一次即可覆蓋
+    is_overwrite_pending = (
+        st.session_state.overwrite_ready and
+        st.session_state.overwrite_week == selected_week
+    )
+    btn_label = "📤 Submit again to confirm / 再按一次確認覆蓋" if is_overwrite_pending else "📤 Submit / 繳交"
+    submit_btn = st.button(btn_label, type="primary", use_container_width=True)
 
-    # 若目前處於「等待確認覆蓋」狀態，顯示確認 UI 取代正常的 Submit 按鈕
-    if pending and pending.get("pdf_bytes"):
-        st.warning(
-            "⚠️ You have already submitted for Week " + str(pending["week"]) + ". "
-            "Click **Yes** to replace your previous submission, or **Cancel** to go back.\n\n"
-            "您本週已有繳交紀錄，請選擇是否以新檔案取代舊作業。"
-        )
-        col_yes, col_no = st.columns(2)
-        with col_yes:
-            if st.button("✅ Yes, resubmit now / 確認重新繳交", key="confirm_resubmit_btn", type="primary", use_container_width=True):
-                import io
-                class FakeFile:
-                    def __init__(self, data, name):
-                        self._data = data
-                        self.name = name
-                    def read(self):
-                        return self._data
-                fake_file = FakeFile(pending["pdf_bytes"], pending["original_filename"])
-                p = pending.copy()
-                st.session_state.pending_overwrite = None
-                st.session_state.confirm_overwrite = True
-                _process_submission(p["student_id"], p["student_name"], p["week"], p["semester"], fake_file, is_late=p["is_late"])
-        with col_no:
-            if st.button("❌ Cancel / 取消", key="cancel_resubmit_btn", use_container_width=True):
-                st.session_state.pending_overwrite = None
-                st.rerun()
-    else:
-        submit_btn = st.button("📤 Submit / 繳交", type="primary", use_container_width=True)
+    if submit_btn:
+        errors = []
+        if not student_id:
+            errors.append("Please enter your Student ID. / 請輸入學號。")
+        elif not id_valid:
+            errors.append("Student ID not found. / 學號查無此人。")
+        if not student_name.strip():
+            errors.append("Please enter your name. / 請輸入姓名。")
+        if not uploaded_file:
+            errors.append("Please upload a PDF file. / 請上傳 PDF 檔案。")
 
-        if submit_btn:
-            errors = []
-            if not student_id:
-                errors.append("Please enter your Student ID. / 請輸入學號。")
-            elif not id_valid:
-                errors.append("Student ID not found. / 學號查無此人。")
-            if not student_name.strip():
-                errors.append("Please enter your name. / 請輸入姓名。")
-            if not uploaded_file:
-                errors.append("Please upload a PDF file. / 請上傳 PDF 檔案。")
-
-            if errors:
-                for e in errors:
-                    st.error(e)
-            else:
-                _process_submission(
-                    student_id, student_name.strip(), selected_week,
-                    current_semester, uploaded_file, is_late=False
-                )
+        if errors:
+            for e in errors:
+                st.error(e)
+        else:
+            _process_submission(
+                student_id, student_name.strip(), selected_week,
+                current_semester, uploaded_file, is_late=False
+            )
 
 
 
