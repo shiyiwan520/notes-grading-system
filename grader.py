@@ -49,7 +49,7 @@ If content is very short (<50 words of substance), score 2 max.
 Respond ONLY with valid JSON, no markdown fences, no extra text:
 {
   "score": <integer 0-5>,
-  "justification": "<string: 80-120 words in English explaining score based on the 3 criteria>",
+  "justification": "<string: 150-200 words in English. For each of the 3 criteria (Content Coverage, Organization, Understanding), briefly state what was strong or weak, then explain the final score>",
   "needs_review": <boolean: true if mixed language, very unusual content, or low confidence>
 }"""
 
@@ -99,7 +99,7 @@ def _parse_response(raw: str) -> Tuple[int, str, bool]:
         score = int(data.get("score", 0))
         if score not in VALID_SCORES:
             score = 0
-        justification = str(data.get("justification", "No justification provided."))[:600]
+        justification = str(data.get("justification", "No justification provided."))
         needs_review = bool(data.get("needs_review", False))
         return score, justification, needs_review
     except Exception:
@@ -109,7 +109,7 @@ def _parse_response(raw: str) -> Tuple[int, str, bool]:
             if score not in VALID_SCORES:
                 score = 0
             just_match = re.search(r'"justification"\s*:\s*"([^"]{10,})', raw)
-            justification = (just_match.group(1)[:300] + "...") if just_match else "See raw response."
+            justification = just_match.group(1) if just_match else "See raw response."
             return score, justification, True
         return 0, f"Could not parse AI response. Raw: {raw[:200]}", True
 

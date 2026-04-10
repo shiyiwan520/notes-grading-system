@@ -247,26 +247,20 @@ def render(semester: str):
                 st.warning("⚠️ This submission requires manual review.")
 
             # ── 評語區 ────────────────────────────────────────
+            # AI 評語：唯讀，永遠顯示最新的 ai_justification
+            st.markdown("**AI Feedback / AI 評語（唯讀）：**")
+            if ai_just:
+                st.info(ai_just)
+            else:
+                st.caption("（尚未AI評分 / Not yet graded by AI）")
+
+            # 老師編輯區：預設空白，老師參考上方AI評語後自行填寫
+            st.markdown("**Teacher Feedback / 老師評語（可編輯，留空則對學生顯示AI評語）：**")
+            st.caption("Leave blank to show AI feedback to student. Fill in to override. / 留空則學生看到AI評語，填寫後學生看到老師評語。")
             textarea_key = f"just_{sid}_{week}"
-
-            # 還原邏輯：
-            # 1. 清空 Sheets 的 teacher_justification
-            # 2. 清掉 text_area 的 session_state（否則 Streamlit 會繼續顯示使用者打過的字）
-            # 3. rerun 後 value= 才會生效，顯示 ai_justification
-            if st.button("↩️ Restore AI original / 還原AI原始評語", key=f"restore_{idx}"):
-                storage.update_record(sid, week, semester, {"teacher_justification": ""})
-                if textarea_key in st.session_state:
-                    del st.session_state[textarea_key]
-                st.rerun()
-
-            # text_area 顯示：teacher_justification 有內容就顯示，沒有就顯示 ai_justification
-            area_default = teacher_just if teacher_just else ai_just
-
-            st.markdown("**Feedback / 評語（可直接編輯）：**")
-            st.caption("Modify as needed. Click 'Restore' above to recover original AI feedback. / 可直接修改，按上方還原鍵可恢復AI原始評語。")
             edited_justification = st.text_area(
                 "Edit feedback / 編輯評語",
-                value=area_default,
+                value=teacher_just,
                 height=120,
                 key=textarea_key
             )
