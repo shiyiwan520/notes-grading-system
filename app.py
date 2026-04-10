@@ -59,9 +59,9 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
             "You have already submitted for Week " + str(week) + ". Submitting again will replace your previous submission.\n"
             "您本週已有繳交紀錄，重新繳交將取代上一份作業。"
         )
-        st.session_state.confirm_overwrite = st.checkbox(
-            "Confirm resubmission / 確認重新繳交", key="overwrite_cb"
-        )
+        if st.button("Yes, resubmit / 確認，重新繳交", key="overwrite_btn", type="primary"):
+            st.session_state.confirm_overwrite = True
+            st.rerun()
         return
 
     st.session_state.confirm_overwrite = False
