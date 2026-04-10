@@ -407,7 +407,15 @@ elif page == "🔍 Check Grade / 查詢成績":
             )
             stored_passcode = str(student_info.get("passcode", "")).strip().lstrip("'") if student_info else ""
 
-            if stored_passcode and q_passcode != stored_passcode:
+            # Sheets 讀取數字時會去掉前導零（0924 → 924），比對時兩邊都正規化
+            def _norm_passcode(p):
+                p = str(p).strip().lstrip("'")
+                # 若全為數字，去掉前導零後比對（0924 == 924）
+                if p.isdigit():
+                    return str(int(p))
+                return p
+
+            if stored_passcode and _norm_passcode(q_passcode) != _norm_passcode(stored_passcode):
                 st.error(
                     "Incorrect passcode. / 驗證碼錯誤，請確認後再試。"
                 )
