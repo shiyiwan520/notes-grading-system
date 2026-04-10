@@ -4,7 +4,7 @@ English Notes Submission & AI Grading System
 """
 
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import os
 from dotenv import load_dotenv
 
@@ -87,8 +87,7 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
             "You have already submitted for Week " + str(week) + ". Submitting again will replace your previous submission.\n"
             "您本週已有繳交紀錄，重新繳交將取代上一份作業。"
         )
-        st.info("Please click the confirmation button below. / 請點下方確認按鈕繼續。")
-        return  # 停止，等待用戶按確認按鈕
+        return  # 停止，等待 pending_overwrite UI 顯示確認按鈕
 
     # 確認覆蓋後清除 flag
     st.session_state.confirm_overwrite = False
@@ -140,7 +139,8 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
             scan_flag = False
 
     # 步驟4：寫入 Google Sheets
-    submitted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tw_tz = timezone(timedelta(hours=8))
+    submitted_at = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
     record = {
         "semester": semester,
         "student_id": student_id,
@@ -344,64 +344,56 @@ if page == "📤 Submit Notes / 繳交作業":
                     )
 
     # ── 正式繳交按鈕 ──────────────────────────────────────────
-    submit_btn = st.button("📤 Submit / 繳交", type="primary", use_container_width=True)
-
-    # ── 重新繳交確認按鈕（顯示在 Submit 按鈕下方）──────────────
     pending = st.session_state.get("pending_overwrite")
+
+    # 若目前處於「等待確認覆蓋」狀態，顯示確認 UI 取代正常的 Submit 按鈕
     if pending and pending.get("pdf_bytes"):
         st.warning(
-            "You have already submitted for Week " + str(pending["week"]) + ". "
-            "Click below to confirm resubmission.\n"
-            "您本週已有繳交紀錄，請按下方按鈕確認重新繳交。"
+            "⚠️ You have already submitted for Week " + str(pending["week"]) + ". "
+            "Click **Yes** to replace your previous submission, or **Cancel** to go back.\n\n"
+            "您本週已有繳交紀錄，請選擇是否以新檔案取代舊作業。"
         )
         col_yes, col_no = st.columns(2)
         with col_yes:
             if st.button("✅ Yes, resubmit now / 確認重新繳交", key="confirm_resubmit_btn", type="primary", use_container_width=True):
-                st.session_state.confirm_overwrite = True
-                pdf_data = pending["pdf_bytes"]
-                orig_name = pending["original_filename"]
-                file_size = pending["file_size"]
-                p_student_id = pending["student_id"]
-                p_student_name = pending["student_name"]
-                p_week = pending["week"]
-                p_semester = pending["semester"]
-                p_is_late = pending["is_late"]
-                st.session_state.pending_overwrite = None
-                # 建立一個假的 file-like object 供 _process_submission 使用
                 import io
                 class FakeFile:
-                    def __init__(self, data, name, size):
+                    def __init__(self, data, name):
                         self._data = data
                         self.name = name
-                        self._size = size
                     def read(self):
                         return self._data
-                fake_file = FakeFile(pdf_data, orig_name, file_size)
-                _process_submission(p_student_id, p_student_name, p_week, p_semester, fake_file, is_late=p_is_late)
+                fake_file = FakeFile(pending["pdf_bytes"], pending["original_filename"])
+                p = pending.copy()
+                st.session_state.pending_overwrite = None
+                st.session_state.confirm_overwrite = True
+                _process_submission(p["student_id"], p["student_name"], p["week"], p["semester"], fake_file, is_late=p["is_late"])
         with col_no:
             if st.button("❌ Cancel / 取消", key="cancel_resubmit_btn", use_container_width=True):
                 st.session_state.pending_overwrite = None
                 st.rerun()
+    else:
+        submit_btn = st.button("📤 Submit / 繳交", type="primary", use_container_width=True)
 
-    if submit_btn:
-        errors = []
-        if not student_id:
-            errors.append("Please enter your Student ID. / 請輸入學號。")
-        elif not id_valid:
-            errors.append("Student ID not found. / 學號查無此人。")
-        if not student_name.strip():
-            errors.append("Please enter your name. / 請輸入姓名。")
-        if not uploaded_file:
-            errors.append("Please upload a PDF file. / 請上傳 PDF 檔案。")
+        if submit_btn:
+            errors = []
+            if not student_id:
+                errors.append("Please enter your Student ID. / 請輸入學號。")
+            elif not id_valid:
+                errors.append("Student ID not found. / 學號查無此人。")
+            if not student_name.strip():
+                errors.append("Please enter your name. / 請輸入姓名。")
+            if not uploaded_file:
+                errors.append("Please upload a PDF file. / 請上傳 PDF 檔案。")
 
-        if errors:
-            for e in errors:
-                st.error(e)
-        else:
-            _process_submission(
-                student_id, student_name.strip(), selected_week,
-                current_semester, uploaded_file, is_late=False
-            )
+            if errors:
+                for e in errors:
+                    st.error(e)
+            else:
+                _process_submission(
+                    student_id, student_name.strip(), selected_week,
+                    current_semester, uploaded_file, is_late=False
+                )
 
 
 
