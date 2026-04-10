@@ -160,31 +160,26 @@ def render(semester: str):
             if needs_review:
                 st.warning("⚠️ This submission requires manual review.")
 
-            # 評語顯示 + 編輯
+            # 評語編輯：預設顯示老師已改的版本，沒改過則顯示AI原始評語
             ai_just = rec.get("ai_justification", "")
-            teacher_just = rec.get("teacher_justification", "")
-            current_just = teacher_just if teacher_just else ai_just
+            teacher_just = rec.get("teacher_justification", "").strip()
+            restore_key = f"restore_val_{idx}"
 
-            st.markdown("**AI Feedback / AI 評語（原始）：**")
-            st.caption(ai_just)
+            # 還原按鈕按下時，把 AI 原始評語存入 restore_key
+            if st.button("↩️ Restore AI original / 還原AI原始評語", key=f"restore_{idx}"):
+                st.session_state[restore_key] = ai_just
 
-            st.markdown("**Teacher Feedback / 老師評語（可修改）：**")
-            st.caption("Leave blank to use AI feedback. Click 'Restore' to recover AI original. / 留空則顯示AI評語，誤刪可按還原。")
+            # 預設值優先序：還原值 > 老師已儲存的評語 > AI 原始評語
+            default_just = st.session_state.get(restore_key, teacher_just if teacher_just else ai_just)
 
-            col_just, col_restore = st.columns([5, 1])
-            with col_just:
-                edited_justification = st.text_area(
-                    "Edit / 編輯",
-                    value=teacher_just,
-                    height=120,
-                    placeholder="Leave blank to use AI feedback / 留空則沿用AI評語",
-                    key=f"just_{idx}"
-                )
-            with col_restore:
-                st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-                if st.button("↩️ Restore AI / 還原AI評語", key=f"restore_{idx}"):
-                    st.session_state[f"just_{idx}"] = ai_just
-                    st.rerun()
+            st.markdown("**Feedback / 評語（可直接編輯）：**")
+            st.caption("Modify as needed. Click 'Restore' above to recover original AI feedback. / 可直接修改，按上方還原鍵可恢復AI原始評語。")
+            edited_justification = st.text_area(
+                "Edit feedback / 編輯評語",
+                value=default_just,
+                height=120,
+                key=f"just_{idx}"
+            )
 
             # 覆蓋分數
             current_idx = 0
