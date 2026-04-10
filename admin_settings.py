@@ -82,6 +82,7 @@ def render(settings: dict):
     current_model = settings.get("ai_model", "gemini-2.5-flash-lite")
     if current_model not in MODEL_OPTIONS:
         current_model = "gemini-2.5-flash-lite"
+    st.info(f"Currently active model / 目前使用中的模型：**{current_model}**")
     new_model = st.selectbox(
         "AI model / 模型",
         options=MODEL_OPTIONS,
