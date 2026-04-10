@@ -135,7 +135,7 @@ def grade(text: str, key_concepts: str = "") -> Tuple[int, str, bool, Dict]:
             model = _get_model(model_name)
             response = model.generate_content(
                 [prompt, user_msg],
-                generation_config={"max_output_tokens": 1024, "temperature": 0.2}
+                generation_config={"max_output_tokens": 2048, "temperature": 0.2}
             )
             score, justification, needs_review = _parse_response(response.text.strip())
             return score, justification, needs_review, {
