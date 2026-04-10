@@ -1,16 +1,22 @@
 """
 grader.py — Gemini AI 評分模組
 6 級分制，3 個評分面向
+含：retry/backoff、模型可設定、request logging
 """
 
 import os
 import re
 import json
+import time
 import streamlit as st
-from typing import Tuple
+from datetime import datetime, timezone, timedelta
+from typing import Tuple, Dict
 import google.generativeai as genai
 
 VALID_SCORES = {0, 1, 2, 3, 4, 5}
+
+# 預設模型（可在 Settings 覆蓋）
+DEFAULT_MODEL = "gemini-2.5-flash-lite"
 
 BASE_SYSTEM_PROMPT = """You are an experienced university teacher grading student English notes.
 The course allows students to use AI tools to help organize their notes.
@@ -54,18 +60,46 @@ Respond ONLY with valid JSON, no markdown fences, no extra text:
 }"""
 
 
-def _get_model():
+def _get_model_name() -> str:
+    """從 settings 讀取模型名稱，沒設定就用預設值"""
+    try:
+        import storage
+        settings = storage.get_settings()
+        return settings.get("ai_model", DEFAULT_MODEL) or DEFAULT_MODEL
+    except Exception:
+        return DEFAULT_MODEL
+
+
+def _get_model(model_name: str):
     api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
     genai.configure(api_key=api_key)
-    return genai.GenerativeModel("gemini-2.5-flash")
+    return genai.GenerativeModel(model_name)
 
 
-def grade(text: str, key_concepts: str = "") -> Tuple[int, str, bool]:
+def grade(text: str, key_concepts: str = "") -> Tuple[int, str, bool, Dict]:
+    """
+    回傳 (score, justification, needs_review, log_info)
+    log_info 包含 model_name, retry_count, request_status, input_tokens_est, graded_at
+    """
+    tw_tz = timezone(timedelta(hours=8))
+    model_name = _get_model_name()
+
+    # 預估 input tokens（粗估：字元數 / 4）
+    input_tokens_est = len(text) // 4
+
     if not text or len(text.strip()) < 10:
-        return 0, "Submission is empty or unreadable. Score: 0 (Missing).", False
+        return 0, "Submission is empty or unreadable. Score: 0 (Missing).", False, {
+            "model_name": model_name, "retry_count": 0,
+            "request_status": "cached", "input_tokens_est": 0,
+            "graded_at": datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S"),
+        }
 
     if _chinese_ratio(text) > 0.70:
-        return 0, "Notes are primarily in Chinese. English notes are required. Score: 0 (Missing).", False
+        return 0, "Notes are primarily in Chinese. English notes are required. Score: 0 (Missing).", False, {
+            "model_name": model_name, "retry_count": 0,
+            "request_status": "cached", "input_tokens_est": input_tokens_est,
+            "graded_at": datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S"),
+        }
 
     prompt = BASE_SYSTEM_PROMPT
     if key_concepts.strip():
@@ -74,7 +108,7 @@ def grade(text: str, key_concepts: str = "") -> Tuple[int, str, bool]:
             "Specifically check whether these concepts appear in the student's notes."
         )
 
-    # 均勻抽樣：取開頭 + 中間 + 結尾，避免只評到目錄頁
+    # 均勻抽樣：避免只評到目錄頁
     if len(text) <= 8000:
         sample_text = text
     else:
@@ -86,17 +120,51 @@ def grade(text: str, key_concepts: str = "") -> Tuple[int, str, bool]:
             + "\n\n[... end section ...]\n\n"
             + text[-2000:]
         )
+
     user_msg = f"Grade the following student English notes:\n\n---\n{sample_text}\n---"
 
-    try:
-        model = _get_model()
-        response = model.generate_content(
-            [prompt, user_msg],
-            generation_config={"max_output_tokens": 1024, "temperature": 0.2}
-        )
-        return _parse_response(response.text.strip())
-    except Exception as e:
-        return 0, f"AI grading failed. Manual review required. ({str(e)[:80]})", True
+    # Retry with backoff：最多 3 次，遇到 429 才 retry
+    MAX_RETRIES = 3
+    BACKOFF_SECONDS = [0, 30, 60]  # 第1次不等，第2次等30秒，第3次等60秒
+
+    for attempt in range(MAX_RETRIES):
+        if attempt > 0:
+            wait = BACKOFF_SECONDS[attempt]
+            time.sleep(wait)
+        try:
+            model = _get_model(model_name)
+            response = model.generate_content(
+                [prompt, user_msg],
+                generation_config={"max_output_tokens": 1024, "temperature": 0.2}
+            )
+            score, justification, needs_review = _parse_response(response.text.strip())
+            return score, justification, needs_review, {
+                "model_name": model_name,
+                "retry_count": attempt,
+                "request_status": "success",
+                "input_tokens_est": input_tokens_est,
+                "graded_at": datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        except Exception as e:
+            err_str = str(e)
+            is_429 = "429" in err_str or "quota" in err_str.lower() or "exhausted" in err_str.lower()
+            if is_429 and attempt < MAX_RETRIES - 1:
+                continue  # retry
+            # 最後一次或非 429 錯誤，直接回傳失敗
+            return 0, f"AI grading failed. Manual review required. ({err_str[:120]})", True, {
+                "model_name": model_name,
+                "retry_count": attempt,
+                "request_status": "failed",
+                "input_tokens_est": input_tokens_est,
+                "graded_at": datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S"),
+            }
+
+    # 不應該到這裡，保險用
+    return 0, "AI grading failed. Manual review required.", True, {
+        "model_name": model_name, "retry_count": MAX_RETRIES,
+        "request_status": "failed", "input_tokens_est": input_tokens_est,
+        "graded_at": datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
 
 def _parse_response(raw: str) -> Tuple[int, str, bool]:

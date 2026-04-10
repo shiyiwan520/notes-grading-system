@@ -7,6 +7,7 @@ import streamlit as st
 import zipfile
 import io
 import requests
+import time
 import storage
 import grader
 import pdf_reader
@@ -71,15 +72,21 @@ def render(semester: str):
                     if not str(r.get("ai_score","")).strip()
                     and not str(r.get("scan_only","")).lower() in ("true","1")]
         if ungrated:
+            st.caption(f"⚠️ {len(ungrated)} ungraded — will run one by one with 7s interval to avoid quota limits. / 將逐筆評分，每筆間隔7秒避免超過API限制。")
             if st.button(f"🤖 Run AI grading ({len(ungrated)}) / 批量AI評分"):
                 progress = st.progress(0, text="Starting AI grading... / 開始AI評分...")
                 success, failed = 0, 0
+                BATCH_INTERVAL = 7  # 秒，保守低於 RPM 10 的限制
                 for i, rec in enumerate(ungrated):
                     sid = rec.get("student_id","")
                     week = rec.get("week","")
                     path = rec.get("storage_path","")
                     week_config = storage.get_week_config(semester, week)
                     key_concepts = week_config.get("key_concepts","") if week_config else ""
+                    progress.progress(
+                        (i+1)/len(ungrated),
+                        text=f"Grading {i+1}/{len(ungrated)}: {sid} Week {week} / 評分中..."
+                    )
                     try:
                         signed_url = storage.get_pdf_signed_url(path, expires_in=300) if path else None
                         if signed_url:
@@ -91,14 +98,21 @@ def render(semester: str):
                                         "scan_only": "True", "needs_review": "True",
                                         "ai_justification": "PDF could not be read. Manual review required.",
                                         "teacher_justification": "",
+                                        "ai_request_status": "failed",
+                                        "ai_model": grader.DEFAULT_MODEL,
                                     })
                                 else:
-                                    score, justification, needs_review = grader.grade(text, key_concepts)
+                                    score, justification, needs_review, log = grader.grade(text, key_concepts)
                                     storage.update_record(sid, week, semester, {
                                         "ai_score": str(score),
                                         "ai_justification": justification,
                                         "needs_review": str(needs_review),
                                         "teacher_justification": "",
+                                        "ai_model": log["model_name"],
+                                        "ai_graded_at": log["graded_at"],
+                                        "ai_retry_count": str(log["retry_count"]),
+                                        "ai_request_status": log["request_status"],
+                                        "ai_input_tokens_est": str(log["input_tokens_est"]),
                                     })
                                 success += 1
                             else:
@@ -107,8 +121,9 @@ def render(semester: str):
                             failed += 1
                     except Exception as e:
                         failed += 1
-                    progress.progress((i+1)/len(ungrated),
-                                      text=f"Grading {i+1}/{len(ungrated)}... / 評分中 {i+1}/{len(ungrated)}...")
+                    # 每筆之間等待，除非是最後一筆
+                    if i < len(ungrated) - 1:
+                        time.sleep(BATCH_INTERVAL)
                 progress.empty()
                 st.success(f"✅ AI grading done: {success} success, {failed} failed. / 完成：{success} 成功，{failed} 失敗。")
                 st.rerun()
@@ -226,12 +241,17 @@ def render(semester: str):
                                     })
                                     st.warning("Scanned PDF detected.")
                                 else:
-                                    sc, just, nr = grader.grade(text, key_concepts)
+                                    sc, just, nr, log = grader.grade(text, key_concepts)
                                     storage.update_record(sid, week, semester, {
                                         "ai_score": str(sc),
                                         "ai_justification": just,
                                         "needs_review": str(nr),
-                                        "teacher_justification": "",  # 清空，讓畫面顯示新AI評語
+                                        "teacher_justification": "",
+                                        "ai_model": log["model_name"],
+                                        "ai_graded_at": log["graded_at"],
+                                        "ai_retry_count": str(log["retry_count"]),
+                                        "ai_request_status": log["request_status"],
+                                        "ai_input_tokens_est": str(log["input_tokens_est"]),
                                     })
                                     st.success(f"AI score: {sc}/5")
                             except Exception as e:

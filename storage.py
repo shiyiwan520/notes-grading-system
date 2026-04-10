@@ -32,6 +32,9 @@ GRADE_FIELDS = [
     "teacher_justification",
     "needs_review", "scan_only", "is_late",
     "final_score", "released", "submitted_at",
+    # AI request logging
+    "ai_model", "ai_graded_at", "ai_retry_count",
+    "ai_request_status", "ai_input_tokens_est",
 ]
 
 # backward-compat alias
