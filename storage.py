@@ -282,7 +282,8 @@ def save_record(record: Dict, overwrite: bool = False):
                         and r_week == week_norm
                         and r.get("semester") == record["semester"]):
                     ws.update(f"A{i}:{chr(64+len(GRADE_FIELDS))}{i}",
-                              [[str(record.get(f, "")) for f in GRADE_FIELDS]])
+                              [[str(record.get(f, "")) for f in GRADE_FIELDS]],
+                              value_input_option="RAW")
                     _invalidate()
                     return
         ws.append_row([str(record.get(f, "")) for f in GRADE_FIELDS])
@@ -301,7 +302,8 @@ def update_record(student_id: str, week: str, semester: str, updates: Dict):
                     and r.get("semester") == semester):
                 merged = {**r, **updates}
                 ws.update(f"A{i}:{chr(64+len(GRADE_FIELDS))}{i}",
-                          [[str(merged.get(f, "")) for f in GRADE_FIELDS]])
+                          [[str(merged.get(f, "")) for f in GRADE_FIELDS]],
+                          value_input_option="RAW")
                 _invalidate()
                 return
     except Exception as e:
