@@ -161,13 +161,30 @@ def render(semester: str):
                 st.warning("⚠️ This submission requires manual review.")
 
             # 評語顯示 + 編輯
-            st.markdown("**AI Feedback / AI 評語：**")
-            edited_justification = st.text_area(
-                "Edit feedback / 編輯評語（可修改）",
-                value=justification,
-                height=120,
-                key=f"just_{idx}"
-            )
+            ai_just = rec.get("ai_justification", "")
+            teacher_just = rec.get("teacher_justification", "")
+            current_just = teacher_just if teacher_just else ai_just
+
+            st.markdown("**AI Feedback / AI 評語（原始）：**")
+            st.caption(ai_just)
+
+            st.markdown("**Teacher Feedback / 老師評語（可修改）：**")
+            st.caption("Leave blank to use AI feedback. Click 'Restore' to recover AI original. / 留空則顯示AI評語，誤刪可按還原。")
+
+            col_just, col_restore = st.columns([5, 1])
+            with col_just:
+                edited_justification = st.text_area(
+                    "Edit / 編輯",
+                    value=teacher_just,
+                    height=120,
+                    placeholder="Leave blank to use AI feedback / 留空則沿用AI評語",
+                    key=f"just_{idx}"
+                )
+            with col_restore:
+                st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
+                if st.button("↩️ Restore AI / 還原AI評語", key=f"restore_{idx}"):
+                    st.session_state[f"just_{idx}"] = ai_just
+                    st.rerun()
 
             # 覆蓋分數
             current_idx = 0
@@ -193,7 +210,7 @@ def render(semester: str):
                 with st.spinner("Saving... / 儲存中..."):
                     storage.update_record(sid, week, semester, {
                         "final_score": final,
-                        "ai_justification": edited_justification,
+                        "teacher_justification": edited_justification,
                         "released": str(release_toggle),
                     })
                 st.success("✅ Saved! / 已儲存！")

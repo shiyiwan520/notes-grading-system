@@ -29,6 +29,7 @@ GRADE_FIELDS = [
     "storage_path", "file_url",
     "replaced_previous",
     "ai_score", "ai_justification",
+    "teacher_justification",
     "needs_review", "scan_only", "is_late",
     "final_score", "released", "submitted_at",
 ]

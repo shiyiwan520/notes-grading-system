@@ -66,21 +66,29 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
         )
         return
 
-    # 若已有紀錄且尚未確認覆蓋 → 顯示確認畫面並停止
+    # 若已有紀錄且尚未確認覆蓋 → 把 PDF bytes 存進 session_state，顯示確認畫面並停止
     if existing and not st.session_state.confirm_overwrite:
+        # 在這裡讀取並暫存 PDF bytes，避免確認後頁面重整時 file_uploader 清空
+        try:
+            pdf_bytes_temp = uploaded_file.read()
+            st.session_state.pending_overwrite = {
+                "student_id": student_id,
+                "student_name": student_name,
+                "week": week,
+                "semester": semester,
+                "is_late": is_late,
+                "pdf_bytes": pdf_bytes_temp,
+                "original_filename": uploaded_file.name,
+                "file_size": len(pdf_bytes_temp),
+            }
+        except Exception:
+            pass
         st.warning(
             "You have already submitted for Week " + str(week) + ". Submitting again will replace your previous submission.\n"
             "您本週已有繳交紀錄，重新繳交將取代上一份作業。"
         )
-        st.session_state.pending_overwrite = {
-            "student_id": student_id,
-            "student_name": student_name,
-            "week": week,
-            "semester": semester,
-            "is_late": is_late,
-        }
-        st.info("Please click the button below to confirm resubmission. / 請點下方按鈕確認重新繳交。")
-        return  # 停止，等待用戶在主頁面按確認按鈕
+        st.info("Please click the confirmation button below. / 請點下方確認按鈕繼續。")
+        return  # 停止，等待用戶按確認按鈕
 
     # 確認覆蓋後清除 flag
     st.session_state.confirm_overwrite = False
@@ -340,23 +348,40 @@ if page == "📤 Submit Notes / 繳交作業":
 
     # ── 重新繳交確認按鈕（顯示在 Submit 按鈕下方）──────────────
     pending = st.session_state.get("pending_overwrite")
-    if pending and uploaded_file:
+    if pending and pending.get("pdf_bytes"):
         st.warning(
             "You have already submitted for Week " + str(pending["week"]) + ". "
             "Click below to confirm resubmission.\n"
             "您本週已有繳交紀錄，請按下方按鈕確認重新繳交。"
         )
-        if st.button("✅ Yes, resubmit now / 確認重新繳交", key="confirm_resubmit_btn", type="primary"):
-            st.session_state.confirm_overwrite = True
-            st.session_state.pending_overwrite = None
-            _process_submission(
-                pending["student_id"], pending["student_name"],
-                pending["week"], pending["semester"],
-                uploaded_file, is_late=pending["is_late"]
-            )
-        if st.button("Cancel / 取消", key="cancel_resubmit_btn"):
-            st.session_state.pending_overwrite = None
-            st.rerun()
+        col_yes, col_no = st.columns(2)
+        with col_yes:
+            if st.button("✅ Yes, resubmit now / 確認重新繳交", key="confirm_resubmit_btn", type="primary", use_container_width=True):
+                st.session_state.confirm_overwrite = True
+                pdf_data = pending["pdf_bytes"]
+                orig_name = pending["original_filename"]
+                file_size = pending["file_size"]
+                p_student_id = pending["student_id"]
+                p_student_name = pending["student_name"]
+                p_week = pending["week"]
+                p_semester = pending["semester"]
+                p_is_late = pending["is_late"]
+                st.session_state.pending_overwrite = None
+                # 建立一個假的 file-like object 供 _process_submission 使用
+                import io
+                class FakeFile:
+                    def __init__(self, data, name, size):
+                        self._data = data
+                        self.name = name
+                        self._size = size
+                    def read(self):
+                        return self._data
+                fake_file = FakeFile(pdf_data, orig_name, file_size)
+                _process_submission(p_student_id, p_student_name, p_week, p_semester, fake_file, is_late=p_is_late)
+        with col_no:
+            if st.button("❌ Cancel / 取消", key="cancel_resubmit_btn", use_container_width=True):
+                st.session_state.pending_overwrite = None
+                st.rerun()
 
     if submit_btn:
         errors = []
@@ -452,7 +477,9 @@ elif page == "🔍 Check Grade / 查詢成績":
                         if released:
                             final = rec.get("final_score") or rec.get("ai_score")
                             st.markdown(f"**Grade / 成績：** {final} / 5")
-                            st.markdown(f"**Feedback / 評語：**  \n{rec.get('ai_justification', '')}")
+                            # 顯示老師評語優先，沒有才顯示 AI 評語
+                            feedback = rec.get("teacher_justification","").strip() or rec.get("ai_justification","")
+                            st.markdown(f"**Feedback / 評語：**  \n{feedback}")
                         else:
                             st.info(
                                 "Your grade is not yet released. Please check back later.  \n"
