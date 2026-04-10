@@ -1,8 +1,10 @@
 """
 admin_grading.py — 批改管理分頁
 含：評語編輯、PDF 下載、批量下載整週、手動觸發 AI 評分
+四維度分數顯示（A/B/C/D 分數條 + Grade Badge）
 """
 
+import re
 import streamlit as st
 import zipfile
 import io
@@ -13,6 +15,131 @@ import grader
 import pdf_reader
 
 
+# ─────────────────────────────────────────────
+# 四維度顯示 helpers
+# ─────────────────────────────────────────────
+
+GRADE_COLOR = {
+    "Excellent": "#FFD700",
+    "Very Good": "#28a745",
+    "Good":      "#007bff",
+    "Fair":      "#fd7e14",
+}
+GRADE_EMOJI = {
+    "Excellent": "🌟",
+    "Very Good": "✅",
+    "Good":      "👍",
+    "Fair":      "⚠️",
+}
+LANG_BADGE = {
+    "english_compliant":     ("✅ English", "#28a745"),
+    "mixed":                 ("🟡 Mixed",   "#fd7e14"),
+    "chinese_dominant":      ("🔴 Chinese", "#dc3545"),
+    # 舊版欄位值相容
+    "Chinese-dominant":      ("🔴 Chinese", "#dc3545"),
+    "Mixed but acceptable":  ("🟡 Mixed",   "#fd7e14"),
+}
+
+
+def _parse_justification(text: str):
+    """
+    從 ai_justification 字串解析等級、加權分、四維度分數。
+    新版格式（grader.py 校正版產出）：
+      "Grade: Very Good (Weighted Score: 3.8/5.0) | A-Prompt Strategy: 4/5 |
+       B-Knowledge Restructuring: 3/5 | C-Learning Value: 4/5 | D-Personal Trace: 3/5 | ..."
+    舊版格式（純文字評語）：解析失敗，回傳 None。
+    """
+    grade_str, weighted, a, b, c, d = None, None, 0, 0, 0, 0
+    if not text:
+        return grade_str, weighted, a, b, c, d
+    try:
+        m = re.search(r"Grade:\s*([\w\s]+?)\s*\(Weighted Score:\s*([\d.]+)", text)
+        if m:
+            grade_str = m.group(1).strip()
+            weighted  = float(m.group(2))
+        m2 = re.search(
+            r"A-Prompt Strategy:\s*(\d)/5.*?B-Knowledge Restructuring:\s*(\d)/5.*?"
+            r"C-Learning Value:\s*(\d)/5.*?D-Personal Trace:\s*(\d)/5",
+            text,
+        )
+        if m2:
+            a, b, c, d = int(m2.group(1)), int(m2.group(2)), int(m2.group(3)), int(m2.group(4))
+    except Exception:
+        pass
+    return grade_str, weighted, a, b, c, d
+
+
+def _show_grade_badge(grade_str: str, weighted):
+    color        = GRADE_COLOR.get(grade_str, "#aaa")
+    emoji        = GRADE_EMOJI.get(grade_str, "")
+    weighted_str = f"{weighted}/5.0" if weighted is not None else "—"
+    st.markdown(
+        f"<div style='background:{color}22; border-left:4px solid {color}; "
+        f"padding:6px 12px; border-radius:6px; margin:6px 0;'>"
+        f"<b style='font-size:1.05em'>{emoji} {grade_str}</b>"
+        f"&nbsp;&nbsp;<span style='color:#555; font-size:0.9em'>"
+        f"Weighted: <b>{weighted_str}</b></span></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _show_dim_bars(a: int, b: int, c: int, d: int):
+    dims = [
+        ("A Prompt",        a, "#6c63ff"),
+        ("B Restructuring", b, "#17a2b8"),
+        ("C Value",         c, "#28a745"),
+        ("D Trace",         d, "#fd7e14"),
+    ]
+    cols = st.columns(4)
+    for col, (label, score, bar_color) in zip(cols, dims):
+        if score == 0:
+            continue
+        pct = int(score / 5 * 100)
+        with col:
+            st.markdown(
+                f"<div style='font-size:0.78em; color:#555; margin-bottom:2px'>{label}</div>"
+                f"<div style='background:#e9ecef; border-radius:4px; height:7px; margin-bottom:3px'>"
+                f"<div style='background:{bar_color}; width:{pct}%; height:7px; border-radius:4px'></div></div>"
+                f"<div style='font-size:0.88em; font-weight:600'>{score}/5</div>",
+                unsafe_allow_html=True,
+            )
+
+
+def _show_lang_badge(lang_compliance: str):
+    if not lang_compliance:
+        return
+    badge_text, badge_color = LANG_BADGE.get(lang_compliance, (lang_compliance, "#aaa"))
+    st.markdown(
+        f"<span style='background:{badge_color}22; color:{badge_color}; "
+        f"border:1px solid {badge_color}44; border-radius:4px; "
+        f"padding:2px 8px; font-size:0.82em'>{badge_text}</span>",
+        unsafe_allow_html=True,
+    )
+
+
+def _show_ai_result(ai_just: str, lang_compliance: str):
+    """
+    新版格式 → Grade badge + 四維度分數條 + 折疊評語
+    舊版格式 → 直接顯示文字評語
+    """
+    grade_str, weighted, a, b, c, d = _parse_justification(ai_just)
+
+    if grade_str:
+        _show_grade_badge(grade_str, weighted)
+        if any([a, b, c, d]):
+            _show_dim_bars(a, b, c, d)
+        _show_lang_badge(lang_compliance)
+        with st.expander("📝 Full AI feedback / 完整AI評語"):
+            st.caption(ai_just)
+    else:
+        _show_lang_badge(lang_compliance)
+        st.info(ai_just)
+
+
+# ─────────────────────────────────────────────
+# 主要 render 函式
+# ─────────────────────────────────────────────
+
 def render(semester: str):
     st.subheader("Grading / 批改管理")
 
@@ -20,7 +147,6 @@ def render(semester: str):
         st.info("Please set the current semester in Settings first.")
         return
 
-    # 重新整理按鈕
     if st.button("🔄 Refresh data / 重新整理資料", key="grading_refresh"):
         st.cache_data.clear()
         st.rerun()
@@ -33,7 +159,7 @@ def render(semester: str):
     # ── 篩選列 ────────────────────────────────────────────────
     col1, col2, col3 = st.columns(3)
     with col1:
-        all_weeks = sorted({str(r.get("week", "")) for r in records})
+        all_weeks   = sorted({str(r.get("week", "")) for r in records})
         week_filter = st.selectbox("Filter by Week / 篩選週次", ["All"] + all_weeks)
     with col2:
         status_filter = st.selectbox(
@@ -63,6 +189,7 @@ def render(semester: str):
 
     # ── 批量操作 ──────────────────────────────────────────────
     col_a, col_b, col_c = st.columns(3)
+
     with col_a:
         if st.button("✅ Release all filtered / 批量公開篩選成績"):
             for r in filtered:
@@ -72,21 +199,25 @@ def render(semester: str):
             st.rerun()
 
     with col_b:
-        # 批量 AI 評分（手動模式下使用）
-        ungrated = [r for r in filtered
-                    if not str(r.get("ai_score","")).strip()
-                    and not str(r.get("scan_only","")).lower() in ("true","1")]
+        ungrated = [
+            r for r in filtered
+            if not str(r.get("ai_score","")).strip()
+            and str(r.get("scan_only","")).lower() not in ("true","1")
+        ]
         if ungrated:
-            st.caption(f"⚠️ {len(ungrated)} ungraded — will run one by one with 7s interval to avoid quota limits. / 將逐筆評分，每筆間隔7秒避免超過API限制。")
+            st.caption(
+                f"⚠️ {len(ungrated)} ungraded — 7s interval to avoid quota limits. / "
+                f"將逐筆評分，每筆間隔7秒。"
+            )
             if st.button(f"🤖 Run AI grading ({len(ungrated)}) / 批量AI評分"):
                 progress = st.progress(0, text="Starting AI grading... / 開始AI評分...")
                 success, failed = 0, 0
-                BATCH_INTERVAL = 7  # 秒，保守低於 RPM 10 的限制
+                BATCH_INTERVAL = 7
                 for i, rec in enumerate(ungrated):
-                    sid = rec.get("student_id","")
-                    week = rec.get("week","")
-                    path = rec.get("storage_path","")
-                    week_config = storage.get_week_config(semester, week)
+                    sid          = rec.get("student_id","")
+                    week         = rec.get("week","")
+                    path         = rec.get("storage_path","")
+                    week_config  = storage.get_week_config(semester, week)
                     key_concepts = week_config.get("key_concepts","") if week_config else ""
                     progress.progress(
                         (i+1)/len(ungrated),
@@ -100,47 +231,50 @@ def render(semester: str):
                                 text, err = pdf_reader.extract_text_from_bytes(resp.content)
                                 if err or not text.strip():
                                     storage.update_record(sid, week, semester, {
-                                        "scan_only": "True", "needs_review": "True",
-                                        "ai_justification": "PDF could not be read. Manual review required.",
+                                        "scan_only":             "True",
+                                        "needs_review":          "True",
+                                        "ai_justification":      "PDF could not be read. Manual review required.",
                                         "teacher_justification": "",
-                                        "ai_request_status": "failed",
-                                        "ai_model": grader.DEFAULT_MODEL,
+                                        "ai_request_status":     "failed",
+                                        "ai_model":              grader.DEFAULT_MODEL,
                                     })
                                 else:
                                     score, justification, needs_review, log = grader.grade(text, key_concepts)
                                     storage.update_record(sid, week, semester, {
-                                        "ai_score": str(score),
-                                        "ai_justification": justification,
-                                        "needs_review": str(needs_review),
+                                        "ai_score":              str(score),
+                                        "ai_justification":      justification,
+                                        "needs_review":          str(needs_review),
                                         "teacher_justification": "",
-                                        "ai_model": log["model_name"],
-                                        "ai_graded_at": log["graded_at"],
-                                        "ai_retry_count": str(log["retry_count"]),
-                                        "ai_request_status": log["request_status"],
-                                        "ai_input_tokens_est": str(log["input_tokens_est"]),
+                                        "ai_model":              log["model_name"],
+                                        "ai_graded_at":          log["graded_at"],
+                                        "ai_retry_count":        str(log["retry_count"]),
+                                        "ai_request_status":     log["request_status"],
+                                        "ai_input_tokens_est":   str(log["input_tokens_est"]),
+                                        "language_compliance":   log.get("language_compliance", ""),
                                     })
                                 success += 1
                             else:
                                 failed += 1
                         else:
                             failed += 1
-                    except Exception as e:
+                    except Exception:
                         failed += 1
-                    # 每筆之間等待，除非是最後一筆
                     if i < len(ungrated) - 1:
                         time.sleep(BATCH_INTERVAL)
                 progress.empty()
-                st.success(f"✅ AI grading done: {success} success, {failed} failed. / 完成：{success} 成功，{failed} 失敗。")
+                st.success(
+                    f"✅ AI grading done: {success} success, {failed} failed. / "
+                    f"完成：{success} 成功，{failed} 失敗。"
+                )
                 st.rerun()
 
     with col_c:
-        # 批量下載整週 PDF
         if week_filter != "All":
             week_records = [r for r in filtered if r.get("storage_path","")]
             if week_records:
                 if st.button(f"📦 Download all PDFs Week {week_filter} / 批量下載PDF"):
                     with st.spinner("Preparing ZIP... / 打包中..."):
-                        zip_buffer = io.BytesIO()
+                        zip_buffer    = io.BytesIO()
                         success_count = 0
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                             for rec in week_records:
@@ -153,7 +287,8 @@ def render(semester: str):
                                 try:
                                     resp = requests.get(signed_url, timeout=30)
                                     if resp.status_code == 200:
-                                        fname = rec.get("original_filename") or f"{rec['student_id']}_Week{week_filter}.pdf"
+                                        fname = rec.get("original_filename") or \
+                                                f"{rec['student_id']}_Week{week_filter}.pdf"
                                         zf.writestr(fname, resp.content)
                                         success_count += 1
                                 except Exception:
@@ -181,24 +316,27 @@ def render(semester: str):
         "1 — Fail",
         "0 — Missing",
     ]
-    SCORE_VALUES = {"5 — Excellent": "5", "4 — Very Good": "4", "3 — Good": "3",
-                    "2 — Fair": "2", "1 — Fail": "1", "0 — Missing": "0"}
+    SCORE_VALUES = {
+        "5 — Excellent": "5", "4 — Very Good": "4", "3 — Good": "3",
+        "2 — Fair": "2",      "1 — Fail": "1",      "0 — Missing": "0",
+    }
 
     for idx, rec in enumerate(filtered):
-        sid = rec.get("student_id","")
-        name = rec.get("name","")
-        week = rec.get("week","")
-        ai_score = str(rec.get("ai_score","")).strip()
-        final_score = str(rec.get("final_score","")).strip()
-        ai_just = str(rec.get("ai_justification","")).strip()
-        teacher_just = str(rec.get("teacher_justification","")).strip()
-        released = str(rec.get("released","")).lower() in ("true","1","yes")
-        needs_review = str(rec.get("needs_review","")).lower() in ("true","1")
-        scan_only = str(rec.get("scan_only","")).lower() in ("true","1")
-        is_late = str(rec.get("is_late","")).lower() in ("true","1")
-        storage_path = rec.get("storage_path","") or rec.get("drive_url","")
-        orig_name = rec.get("original_filename") or rec.get("filename","submission.pdf")
-        file_size = rec.get("file_size_bytes","")
+        sid             = rec.get("student_id","")
+        name            = rec.get("name","")
+        week            = rec.get("week","")
+        ai_score        = str(rec.get("ai_score","")).strip()
+        final_score     = str(rec.get("final_score","")).strip()
+        ai_just         = str(rec.get("ai_justification","")).strip()
+        teacher_just    = str(rec.get("teacher_justification","")).strip()
+        lang_compliance = str(rec.get("language_compliance","")).strip()
+        released        = str(rec.get("released","")).lower() in ("true","1","yes")
+        needs_review    = str(rec.get("needs_review","")).lower() in ("true","1")
+        scan_only       = str(rec.get("scan_only","")).lower() in ("true","1")
+        is_late         = str(rec.get("is_late","")).lower() in ("true","1")
+        storage_path    = rec.get("storage_path","") or rec.get("drive_url","")
+        orig_name       = rec.get("original_filename") or rec.get("filename","submission.pdf")
+        file_size       = rec.get("file_size_bytes","")
 
         flags = []
         if needs_review: flags.append("⚠️")
@@ -211,7 +349,8 @@ def render(semester: str):
         header = f"{flag_str}  {sid} — {name}  |  Week {week}  |  Score: {display_score}/5"
 
         with st.expander(header):
-            # PDF 連結
+
+            # ── PDF 連結 ──────────────────────────────────────
             size_str = f"{round(int(file_size)/1024, 1)} KB" if str(file_size).isdigit() else ""
             if storage_path and not storage_path.startswith("sheets://"):
                 signed_url = storage.get_pdf_signed_url(storage_path, expires_in=3600)
@@ -223,74 +362,81 @@ def render(semester: str):
             else:
                 st.caption("PDF not available.")
 
-            # AI 分數 + 單筆 AI 評分按鈕
+            # ── AI 分數 + 單筆評分按鈕 ────────────────────────
             score_col, btn_col = st.columns([3, 2])
             with score_col:
-                st.markdown(f"**AI Score / AI 分數：** {ai_score if ai_score else '（尚未評分）'} / 5")
+                st.markdown(
+                    f"**AI Score / AI 分數：** {ai_score if ai_score else '（尚未評分）'} / 5"
+                )
             with btn_col:
                 if not scan_only:
                     if st.button("🤖 Run AI now / 立即AI評分", key=f"ai_now_{idx}"):
                         with st.spinner("AI grading... / AI評分中..."):
-                            path = storage_path
-                            week_config = storage.get_week_config(semester, week)
+                            week_config  = storage.get_week_config(semester, week)
                             key_concepts = week_config.get("key_concepts","") if week_config else ""
                             try:
-                                signed = storage.get_pdf_signed_url(path, expires_in=300)
-                                resp = requests.get(signed, timeout=30)
+                                signed    = storage.get_pdf_signed_url(storage_path, expires_in=300)
+                                resp      = requests.get(signed, timeout=30)
                                 text, err = pdf_reader.extract_text_from_bytes(resp.content)
                                 if err or not text.strip():
                                     storage.update_record(sid, week, semester, {
-                                        "scan_only": "True", "needs_review": "True",
-                                        "ai_justification": "PDF could not be read. Manual review required.",
-                                        "teacher_justification": "",  # 清空，顯示最新AI結果
+                                        "scan_only":             "True",
+                                        "needs_review":          "True",
+                                        "ai_justification":      "PDF could not be read. Manual review required.",
+                                        "teacher_justification": "",
                                     })
                                     st.warning("Scanned PDF detected.")
                                 else:
                                     sc, just, nr, log = grader.grade(text, key_concepts)
                                     storage.update_record(sid, week, semester, {
-                                        "ai_score": str(sc),
-                                        "ai_justification": just,
-                                        "needs_review": str(nr),
+                                        "ai_score":              str(sc),
+                                        "ai_justification":      just,
+                                        "needs_review":          str(nr),
                                         "teacher_justification": "",
-                                        "ai_model": log["model_name"],
-                                        "ai_graded_at": log["graded_at"],
-                                        "ai_retry_count": str(log["retry_count"]),
-                                        "ai_request_status": log["request_status"],
-                                        "ai_input_tokens_est": str(log["input_tokens_est"]),
+                                        "ai_model":              log["model_name"],
+                                        "ai_graded_at":          log["graded_at"],
+                                        "ai_retry_count":        str(log["retry_count"]),
+                                        "ai_request_status":     log["request_status"],
+                                        "ai_input_tokens_est":   str(log["input_tokens_est"]),
+                                        "language_compliance":   log.get("language_compliance", ""),
                                     })
                                     st.success(f"AI score: {sc}/5")
                             except Exception as e:
                                 st.error(f"AI grading failed: {e}")
-                        # 清掉 text_area session_state，讓新的 ai_justification 能正確顯示
                         if f"just_{sid}_{week}" in st.session_state:
                             del st.session_state[f"just_{sid}_{week}"]
                         st.rerun()
 
+            # ── 警告標記 ──────────────────────────────────────
             if scan_only:
                 st.warning("📄 Scanned PDF — AI could not read text. Please grade manually.")
             if needs_review:
                 st.warning("⚠️ This submission requires manual review.")
 
-            # ── 評語區 ────────────────────────────────────────
-            # AI 評語：唯讀，永遠顯示最新的 ai_justification
+            # ── AI 評分結果 ───────────────────────────────────
             st.markdown("**AI Feedback / AI 評語（唯讀）：**")
             if ai_just:
-                st.info(ai_just)
+                _show_ai_result(ai_just, lang_compliance)
             else:
                 st.caption("（尚未AI評分 / Not yet graded by AI）")
+                _show_lang_badge(lang_compliance)
 
-            # 老師編輯區：預設空白，老師參考上方AI評語後自行填寫
-            st.markdown("**Teacher Feedback / 老師評語（可編輯，留空則對學生顯示AI評語）：**")
-            st.caption("Leave blank to show AI feedback to student. Fill in to override. / 留空則學生看到AI評語，填寫後學生看到老師評語。")
-            textarea_key = f"just_{sid}_{week}"
+            # ── 老師編輯區 ────────────────────────────────────
+            st.markdown(
+                "**Teacher Feedback / 老師評語（可編輯，留空則對學生顯示AI評語）：**"
+            )
+            st.caption(
+                "Leave blank to show AI feedback to student. Fill in to override. / "
+                "留空則學生看到AI評語，填寫後學生看到老師評語。"
+            )
             edited_justification = st.text_area(
                 "Edit feedback / 編輯評語",
                 value=teacher_just,
                 height=120,
-                key=textarea_key
+                key=f"just_{sid}_{week}",
             )
 
-            # 覆蓋分數
+            # ── 覆蓋分數 ──────────────────────────────────────
             current_idx = 0
             for i, opt in enumerate(SCORE_OPTIONS):
                 if final_score and opt.startswith(final_score):
@@ -300,25 +446,22 @@ def render(semester: str):
                 "Override score / 老師最終分數",
                 SCORE_OPTIONS,
                 index=current_idx,
-                key=f"score_{sid}_{week}"
+                key=f"score_{sid}_{week}",
             )
 
             release_toggle = st.checkbox(
                 "Release grade to student / 公開成績給學生",
                 value=released,
-                key=f"release_{sid}_{week}"
+                key=f"release_{sid}_{week}",
             )
 
             if st.button("💾 Save / 儲存", key=f"save_{idx}"):
                 final = "" if new_score_label.startswith("(") else SCORE_VALUES.get(new_score_label, "")
-                # 儲存後清除還原狀態
-                if restore_key in st.session_state:
-                    del st.session_state[restore_key]
                 with st.spinner("Saving... / 儲存中..."):
                     storage.update_record(sid, week, semester, {
-                        "final_score": final,
+                        "final_score":           final,
                         "teacher_justification": edited_justification,
-                        "released": str(release_toggle),
+                        "released":              str(release_toggle),
                     })
                 st.success("✅ Saved! / 已儲存！")
                 st.rerun()
