@@ -375,36 +375,26 @@ def upload_pdf(
 ) -> Dict:
     """
     安全上傳 PDF 到 Supabase Storage。
-    回傳 dict：
-      success: bool
-      storage_path: str
-      file_url: str
-      file_size_bytes: int
-      error: str（失敗時）
-
-    安全覆蓋流程：
-      1. 上傳新檔（新路徑）
-      2. 回傳成功 → 呼叫端寫 Sheets
-      3. 呼叫端確認 Sheets 寫入後再呼叫 delete_old_pdf()
+    使用固定路徑（學號_週次），upsert=true 直接覆蓋舊檔，
+    永遠不會有殘留舊檔，無需手動刪除。
+    路徑格式：{semester}/Week_{week}/{student_id}.pdf
     """
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    # 路徑只用學號避免中文字元問題
-    storage_path = f"{semester}/Week_{str(week).zfill(2)}/{student_id}_{timestamp}.pdf"
+    # 固定路徑：同一學生同一週永遠是同一個檔案位置
+    storage_path = f"{semester}/Week_{str(week).zfill(2)}/{student_id}.pdf"
 
     try:
         sb = _get_supabase()
-        # 上傳檔案
+        # upsert=true：路徑已存在就直接覆蓋，不存在就新建
         upload_resp = sb.storage.from_(SUPABASE_BUCKET).upload(
             path=storage_path,
             file=pdf_bytes,
-            file_options={"content-type": "application/pdf", "upsert": "false"},
+            file_options={"content-type": "application/pdf", "upsert": "true"},
         )
         # 產生 signed URL（有效期 1 年）
         try:
             signed = sb.storage.from_(SUPABASE_BUCKET).create_signed_url(
                 storage_path, expires_in=365 * 24 * 3600
             )
-            # 新版 supabase-py 回傳格式不同，嘗試多種 key
             file_url = (
                 signed.get("signedURL")
                 or signed.get("signed_url")
@@ -412,7 +402,6 @@ def upload_pdf(
                 or ""
             )
         except Exception as sign_err:
-            # signed URL 失敗不阻止繳交，只是連結空白
             file_url = ""
             st.warning(f"PDF uploaded but signed URL failed: {sign_err}")
 
@@ -425,7 +414,6 @@ def upload_pdf(
         }
     except Exception as e:
         error_detail = str(e)
-        # 顯示詳細錯誤給老師端 debug 用
         st.warning(f"[Debug] Supabase upload error: {error_detail[:200]}")
         return {
             "success": False,
@@ -442,9 +430,10 @@ def delete_old_pdf(old_storage_path: str) -> bool:
         return True
     try:
         sb = _get_supabase()
-        sb.storage.from_(SUPABASE_BUCKET).remove([old_storage_path])
+        result = sb.storage.from_(SUPABASE_BUCKET).remove([old_storage_path])
         return True
-    except Exception:
+    except Exception as e:
+        print(f"[delete_old_pdf] Failed to delete {old_storage_path}: {e}")
         return False
 
 

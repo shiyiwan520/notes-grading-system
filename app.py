@@ -165,9 +165,7 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
             )
             return
 
-    # 步驟5：確認 Sheets 寫入後才刪舊檔
-    if existing and old_path:
-        storage.delete_old_pdf(old_path)
+    # 步驟5：Sheets 寫入完成（Supabase 已用 upsert 直接覆蓋，無需手動刪舊檔）
 
     # 步驟6：顯示真實成功訊息
     if existing:
