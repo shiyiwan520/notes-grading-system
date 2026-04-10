@@ -116,19 +116,22 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
         )
         return
 
-    # 步驟3：讀取文字 + AI 評分
-    with st.spinner("AI is grading your notes... / AI 評分中，請稍候..."):
-        text, read_error = pdf_reader.extract_text_from_bytes(pdf_bytes)
-        week_config = storage.get_week_config(semester, week)
-        key_concepts = week_config.get("key_concepts", "") if week_config else ""
-        if read_error or not text.strip():
-            score, justification, needs_review = (
-                0, "PDF could not be read (possibly scanned image). Manual review required.", True
-            )
-            scan_flag = True
-        else:
+    # 步驟3：讀取文字 + AI 評分（依設定決定是否自動執行）
+    settings_now = storage.get_settings()
+    ai_mode = settings_now.get("ai_grading_mode", "manual")  # 預設手動
+
+    text, read_error = pdf_reader.extract_text_from_bytes(pdf_bytes)
+    week_config = storage.get_week_config(semester, week)
+    key_concepts = week_config.get("key_concepts", "") if week_config else ""
+    scan_flag = bool(read_error or not text.strip())
+
+    if ai_mode == "auto" and not scan_flag:
+        with st.spinner("AI is grading your notes... / AI 評分中，請稍候..."):
             score, justification, needs_review = grader.grade(text, key_concepts)
-            scan_flag = False
+    else:
+        score = ""
+        needs_review = True
+        justification = "PDF could not be read (possibly scanned image). Manual review required." if scan_flag else ""
 
     # 步驟4：寫入 Google Sheets
     tw_tz = timezone(timedelta(hours=8))

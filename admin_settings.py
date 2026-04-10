@@ -39,6 +39,35 @@ def render(settings: dict):
 
     st.divider()
 
+    # ── AI 評分模式 ───────────────────────────────────────────
+    st.markdown("**AI Grading Mode / AI 評分模式**")
+    st.caption(
+        "Auto: AI grades immediately when student submits (requires sufficient API quota).  
+"
+        "Manual: AI grading is triggered by teacher in the Grading tab (recommended for free tier).  
+"
+        "自動：學生繳交時立即 AI 評分（需足夠 API 額度）。手動：由老師在批改頁面觸發（免費版建議使用）。"
+    )
+    ai_mode = settings.get("ai_grading_mode", "manual")
+    mode_options = ["manual", "auto"]
+    mode_labels = {"manual": "✋ Manual — teacher triggers AI / 手動（老師觸發）",
+                   "auto": "⚡ Auto — AI runs on submission / 自動（繳交時立即）"}
+    current_mode_idx = mode_options.index(ai_mode) if ai_mode in mode_options else 0
+    new_mode_label = st.radio(
+        "AI grading mode / 評分模式",
+        options=[mode_labels[m] for m in mode_options],
+        index=current_mode_idx,
+        horizontal=True,
+        key="ai_mode_radio"
+    )
+    new_mode = mode_options[[mode_labels[m] for m in mode_options].index(new_mode_label)]
+    if st.button("Save AI mode / 儲存評分模式", key="save_ai_mode"):
+        storage.save_setting("ai_grading_mode", new_mode)
+        st.success(f"✅ AI grading mode set to: {new_mode} / 已設定為：{new_mode}")
+        st.rerun()
+
+    st.divider()
+
     # ── Email 通知設定 ────────────────────────────────────────
     st.markdown("**Email Notifications / Email 通知**")
     st.caption(

@@ -1,14 +1,15 @@
 """
 admin_grading.py — 批改管理分頁
-含：評語編輯、PDF 下載、批量下載整週
+含：評語編輯、PDF 下載、批量下載整週、手動觸發 AI 評分
 """
 
 import streamlit as st
-import pandas as pd
 import zipfile
 import io
 import requests
 import storage
+import grader
+import pdf_reader
 
 
 def render(semester: str):
@@ -55,7 +56,7 @@ def render(semester: str):
     st.markdown(f"**Showing {len(filtered)} record(s) / 顯示 {len(filtered)} 筆**")
 
     # ── 批量操作 ──────────────────────────────────────────────
-    col_a, col_b = st.columns(2)
+    col_a, col_b, col_c = st.columns(3)
     with col_a:
         if st.button("✅ Release all filtered / 批量公開篩選成績"):
             for r in filtered:
@@ -65,12 +66,58 @@ def render(semester: str):
             st.rerun()
 
     with col_b:
+        # 批量 AI 評分（手動模式下使用）
+        ungrated = [r for r in filtered
+                    if not str(r.get("ai_score","")).strip()
+                    and not str(r.get("scan_only","")).lower() in ("true","1")]
+        if ungrated:
+            if st.button(f"🤖 Run AI grading ({len(ungrated)}) / 批量AI評分"):
+                progress = st.progress(0, text="Starting AI grading... / 開始AI評分...")
+                success, failed = 0, 0
+                for i, rec in enumerate(ungrated):
+                    sid = rec.get("student_id","")
+                    week = rec.get("week","")
+                    path = rec.get("storage_path","")
+                    week_config = storage.get_week_config(semester, week)
+                    key_concepts = week_config.get("key_concepts","") if week_config else ""
+                    try:
+                        signed_url = storage.get_pdf_signed_url(path, expires_in=300) if path else None
+                        if signed_url:
+                            resp = requests.get(signed_url, timeout=30)
+                            if resp.status_code == 200:
+                                text, err = pdf_reader.extract_text_from_bytes(resp.content)
+                                if err or not text.strip():
+                                    storage.update_record(sid, week, semester, {
+                                        "scan_only": "True", "needs_review": "True",
+                                        "ai_justification": "PDF could not be read. Manual review required."
+                                    })
+                                else:
+                                    score, justification, needs_review = grader.grade(text, key_concepts)
+                                    storage.update_record(sid, week, semester, {
+                                        "ai_score": str(score),
+                                        "ai_justification": justification,
+                                        "needs_review": str(needs_review),
+                                    })
+                                success += 1
+                            else:
+                                failed += 1
+                        else:
+                            failed += 1
+                    except Exception as e:
+                        failed += 1
+                    progress.progress((i+1)/len(ungrated),
+                                      text=f"Grading {i+1}/{len(ungrated)}... / 評分中 {i+1}/{len(ungrated)}...")
+                progress.empty()
+                st.success(f"✅ AI grading done: {success} success, {failed} failed. / 完成：{success} 成功，{failed} 失敗。")
+                st.rerun()
+
+    with col_c:
         # 批量下載整週 PDF
         if week_filter != "All":
             week_records = [r for r in filtered if r.get("storage_path","")]
             if week_records:
-                if st.button(f"📦 Download all PDFs for Week {week_filter} / 批量下載本週PDF"):
-                    with st.spinner(f"Preparing ZIP for Week {week_filter}... / 打包中，請稍候..."):
+                if st.button(f"📦 Download all PDFs Week {week_filter} / 批量下載PDF"):
+                    with st.spinner("Preparing ZIP... / 打包中..."):
                         zip_buffer = io.BytesIO()
                         success_count = 0
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -92,13 +139,13 @@ def render(semester: str):
                         zip_buffer.seek(0)
                     if success_count > 0:
                         st.download_button(
-                            f"📥 Download ZIP ({success_count} files) / 下載壓縮檔",
+                            f"📥 Download ZIP ({success_count} files)",
                             data=zip_buffer,
                             file_name=f"{semester}_Week{week_filter}_PDFs.zip",
                             mime="application/zip"
                         )
                     else:
-                        st.error("Could not download any PDFs. / 無法下載任何 PDF。")
+                        st.error("Could not download any PDFs.")
 
     st.divider()
 
@@ -119,9 +166,10 @@ def render(semester: str):
         sid = rec.get("student_id","")
         name = rec.get("name","")
         week = rec.get("week","")
-        ai_score = str(rec.get("ai_score",""))
+        ai_score = str(rec.get("ai_score","")).strip()
         final_score = str(rec.get("final_score","")).strip()
-        justification = rec.get("ai_justification","")
+        ai_just = str(rec.get("ai_justification","")).strip()
+        teacher_just = str(rec.get("teacher_justification","")).strip()
         released = str(rec.get("released","")).lower() in ("true","1","yes")
         needs_review = str(rec.get("needs_review","")).lower() in ("true","1")
         scan_only = str(rec.get("scan_only","")).lower() in ("true","1")
@@ -137,7 +185,7 @@ def render(semester: str):
         flags.append("✅" if released else "🔒")
         flag_str = " ".join(flags)
 
-        display_score = final_score if final_score else ai_score
+        display_score = final_score if final_score else (ai_score if ai_score else "?")
         header = f"{flag_str}  {sid} — {name}  |  Week {week}  |  Score: {display_score}/5"
 
         with st.expander(header):
@@ -153,32 +201,68 @@ def render(semester: str):
             else:
                 st.caption("PDF not available.")
 
-            st.markdown(f"**AI Score / AI 分數：** {ai_score} / 5")
+            # AI 分數 + 單筆 AI 評分按鈕
+            score_col, btn_col = st.columns([3, 2])
+            with score_col:
+                st.markdown(f"**AI Score / AI 分數：** {ai_score if ai_score else '（尚未評分）'} / 5")
+            with btn_col:
+                if not scan_only:
+                    if st.button("🤖 Run AI now / 立即AI評分", key=f"ai_now_{idx}"):
+                        with st.spinner("AI grading... / AI評分中..."):
+                            path = storage_path
+                            week_config = storage.get_week_config(semester, week)
+                            key_concepts = week_config.get("key_concepts","") if week_config else ""
+                            try:
+                                signed = storage.get_pdf_signed_url(path, expires_in=300)
+                                resp = requests.get(signed, timeout=30)
+                                text, err = pdf_reader.extract_text_from_bytes(resp.content)
+                                if err or not text.strip():
+                                    storage.update_record(sid, week, semester, {
+                                        "scan_only": "True", "needs_review": "True",
+                                        "ai_justification": "PDF could not be read. Manual review required."
+                                    })
+                                    st.warning("Scanned PDF detected.")
+                                else:
+                                    sc, just, nr = grader.grade(text, key_concepts)
+                                    storage.update_record(sid, week, semester, {
+                                        "ai_score": str(sc),
+                                        "ai_justification": just,
+                                        "needs_review": str(nr),
+                                    })
+                                    st.success(f"AI score: {sc}/5")
+                            except Exception as e:
+                                st.error(f"AI grading failed: {e}")
+                        st.rerun()
 
             if scan_only:
                 st.warning("📄 Scanned PDF — AI could not read text. Please grade manually.")
             if needs_review:
                 st.warning("⚠️ This submission requires manual review.")
 
-            # 評語編輯：預設顯示老師已改的版本，沒改過則顯示AI原始評語
-            ai_just = rec.get("ai_justification", "")
-            teacher_just = rec.get("teacher_justification", "").strip()
-            restore_key = f"restore_val_{idx}"
+            # ── 評語區 ────────────────────────────────────────
+            # 還原鍵：記錄「這個 expander 是否已按過還原」
+            restore_key = f"restored_{sid}_{week}"
 
-            # 還原按鈕按下時，把 AI 原始評語存入 restore_key
+            # 還原按鈕：直接把 ai_just 寫入 session_state，下次渲染 text_area 就用它
             if st.button("↩️ Restore AI original / 還原AI原始評語", key=f"restore_{idx}"):
                 st.session_state[restore_key] = ai_just
+                st.rerun()
 
-            # 預設值優先序：還原值 > 老師已儲存的評語 > AI 原始評語
-            default_just = st.session_state.get(restore_key, teacher_just if teacher_just else ai_just)
+            # text_area 的初始值邏輯：
+            #   - 按過還原 → 用 ai_just（從 Sheets 抓）
+            #   - 沒按過   → 老師已存的評語優先，沒有才用 ai_just
+            if restore_key in st.session_state:
+                area_default = st.session_state[restore_key]
+            else:
+                area_default = teacher_just if teacher_just else ai_just
 
             st.markdown("**Feedback / 評語（可直接編輯）：**")
             st.caption("Modify as needed. Click 'Restore' above to recover original AI feedback. / 可直接修改，按上方還原鍵可恢復AI原始評語。")
             edited_justification = st.text_area(
                 "Edit feedback / 編輯評語",
-                value=default_just,
+                value=area_default,
                 height=120,
-                key=f"just_{idx}"
+                key=f"just_{sid}_{week}"   # 用 sid+week 當 key，避免 idx 因篩選變動造成錯位
             )
 
             # 覆蓋分數
@@ -191,17 +275,20 @@ def render(semester: str):
                 "Override score / 老師最終分數",
                 SCORE_OPTIONS,
                 index=current_idx,
-                key=f"score_{idx}"
+                key=f"score_{sid}_{week}"
             )
 
             release_toggle = st.checkbox(
                 "Release grade to student / 公開成績給學生",
                 value=released,
-                key=f"release_{idx}"
+                key=f"release_{sid}_{week}"
             )
 
             if st.button("💾 Save / 儲存", key=f"save_{idx}"):
                 final = "" if new_score_label.startswith("(") else SCORE_VALUES.get(new_score_label, "")
+                # 儲存後清除還原狀態
+                if restore_key in st.session_state:
+                    del st.session_state[restore_key]
                 with st.spinner("Saving... / 儲存中..."):
                     storage.update_record(sid, week, semester, {
                         "final_score": final,
