@@ -89,7 +89,8 @@ def render(semester: str):
                                 if err or not text.strip():
                                     storage.update_record(sid, week, semester, {
                                         "scan_only": "True", "needs_review": "True",
-                                        "ai_justification": "PDF could not be read. Manual review required."
+                                        "ai_justification": "PDF could not be read. Manual review required.",
+                                        "teacher_justification": "",
                                     })
                                 else:
                                     score, justification, needs_review = grader.grade(text, key_concepts)
@@ -97,6 +98,7 @@ def render(semester: str):
                                         "ai_score": str(score),
                                         "ai_justification": justification,
                                         "needs_review": str(needs_review),
+                                        "teacher_justification": "",
                                     })
                                 success += 1
                             else:
@@ -219,7 +221,8 @@ def render(semester: str):
                                 if err or not text.strip():
                                     storage.update_record(sid, week, semester, {
                                         "scan_only": "True", "needs_review": "True",
-                                        "ai_justification": "PDF could not be read. Manual review required."
+                                        "ai_justification": "PDF could not be read. Manual review required.",
+                                        "teacher_justification": "",  # 清空，顯示最新AI結果
                                     })
                                     st.warning("Scanned PDF detected.")
                                 else:
@@ -228,6 +231,7 @@ def render(semester: str):
                                         "ai_score": str(sc),
                                         "ai_justification": just,
                                         "needs_review": str(nr),
+                                        "teacher_justification": "",  # 清空，讓畫面顯示新AI評語
                                     })
                                     st.success(f"AI score: {sc}/5")
                             except Exception as e:
@@ -240,21 +244,15 @@ def render(semester: str):
                 st.warning("⚠️ This submission requires manual review.")
 
             # ── 評語區 ────────────────────────────────────────
-            # 還原鍵：記錄「這個 expander 是否已按過還原」
-            restore_key = f"restored_{sid}_{week}"
-
-            # 還原按鈕：直接把 ai_just 寫入 session_state，下次渲染 text_area 就用它
+            # 還原邏輯：還原 = 把 teacher_justification 清空，讓系統自然顯示 ai_justification
+            # 不需要 session_state，直接寫 Sheets 最乾淨
             if st.button("↩️ Restore AI original / 還原AI原始評語", key=f"restore_{idx}"):
-                st.session_state[restore_key] = ai_just
+                storage.update_record(sid, week, semester, {"teacher_justification": ""})
+                st.success("Restored! / 已還原為AI原始評語。")
                 st.rerun()
 
-            # text_area 的初始值邏輯：
-            #   - 按過還原 → 用 ai_just（從 Sheets 抓）
-            #   - 沒按過   → 老師已存的評語優先，沒有才用 ai_just
-            if restore_key in st.session_state:
-                area_default = st.session_state[restore_key]
-            else:
-                area_default = teacher_just if teacher_just else ai_just
+            # text_area 顯示：teacher_justification 有內容就顯示，沒有就顯示 ai_justification
+            area_default = teacher_just if teacher_just else ai_just
 
             st.markdown("**Feedback / 評語（可直接編輯）：**")
             st.caption("Modify as needed. Click 'Restore' above to recover original AI feedback. / 可直接修改，按上方還原鍵可恢復AI原始評語。")
