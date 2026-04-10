@@ -236,6 +236,9 @@ def render(semester: str):
                                     st.success(f"AI score: {sc}/5")
                             except Exception as e:
                                 st.error(f"AI grading failed: {e}")
+                        # 清掉 text_area session_state，讓新的 ai_justification 能正確顯示
+                        if f"just_{sid}_{week}" in st.session_state:
+                            del st.session_state[f"just_{sid}_{week}"]
                         st.rerun()
 
             if scan_only:
@@ -244,11 +247,16 @@ def render(semester: str):
                 st.warning("⚠️ This submission requires manual review.")
 
             # ── 評語區 ────────────────────────────────────────
-            # 還原邏輯：還原 = 把 teacher_justification 清空，讓系統自然顯示 ai_justification
-            # 不需要 session_state，直接寫 Sheets 最乾淨
+            textarea_key = f"just_{sid}_{week}"
+
+            # 還原邏輯：
+            # 1. 清空 Sheets 的 teacher_justification
+            # 2. 清掉 text_area 的 session_state（否則 Streamlit 會繼續顯示使用者打過的字）
+            # 3. rerun 後 value= 才會生效，顯示 ai_justification
             if st.button("↩️ Restore AI original / 還原AI原始評語", key=f"restore_{idx}"):
                 storage.update_record(sid, week, semester, {"teacher_justification": ""})
-                st.success("Restored! / 已還原為AI原始評語。")
+                if textarea_key in st.session_state:
+                    del st.session_state[textarea_key]
                 st.rerun()
 
             # text_area 顯示：teacher_justification 有內容就顯示，沒有就顯示 ai_justification
@@ -260,7 +268,7 @@ def render(semester: str):
                 "Edit feedback / 編輯評語",
                 value=area_default,
                 height=120,
-                key=f"just_{sid}_{week}"   # 用 sid+week 當 key，避免 idx 因篩選變動造成錯位
+                key=textarea_key
             )
 
             # 覆蓋分數
