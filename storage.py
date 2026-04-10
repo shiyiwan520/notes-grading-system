@@ -251,10 +251,13 @@ def find_record(student_id: str, week: str, semester: str) -> Optional[Dict]:
     try:
         ss = _get_spreadsheet()
         ws = _get_or_create_ws(ss, SHEET_GRADES, GRADE_FIELDS)
+        # 正規化週次：去掉前導零做比對，例如 "05" == "5" == 5
+        week_norm = str(int(str(week).lstrip("0") or "0"))
         for r in ws.get_all_records():
+            r_week = str(r.get("week","")).lstrip("0") or "0"
             if (r.get("semester") == semester
                     and r.get("student_id", "").upper() == student_id.upper()
-                    and str(r.get("week")) == str(week)):
+                    and r_week == week_norm):
                 return r
     except Exception:
         pass
@@ -271,9 +274,11 @@ def save_record(record: Dict, overwrite: bool = False):
         ss = _get_spreadsheet()
         ws = _get_or_create_ws(ss, SHEET_GRADES, GRADE_FIELDS)
         if overwrite:
+            week_norm = str(int(str(record["week"]).lstrip("0") or "0"))
             for i, r in enumerate(ws.get_all_records(), start=2):
+                r_week = str(r.get("week","")).lstrip("0") or "0"
                 if (r.get("student_id", "").upper() == record["student_id"].upper()
-                        and str(r.get("week")) == str(record["week"])
+                        and r_week == week_norm
                         and r.get("semester") == record["semester"]):
                     ws.update(f"A{i}:{chr(64+len(GRADE_FIELDS))}{i}",
                               [[str(record.get(f, "")) for f in GRADE_FIELDS]])
