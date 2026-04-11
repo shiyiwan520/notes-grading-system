@@ -239,7 +239,7 @@ def grade(
         )
 
     # 只取前 4000 字元（約 3000 tokens），控制費用
-    sample_text = text[:4000]
+    sample_text = text[:8000]
 
     for attempt in range(max_retries):
         try:
@@ -263,7 +263,18 @@ def grade(
             return _parse_response(raw, language_compliance)
 
         except Exception as e:
+            err_str = str(e)
             logger.warning(f"Gemini API attempt {attempt + 1} failed: {e}")
+
+            # 429 速率限制：立即中止，不要繼續 retry 讓情況更糟
+            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
+                return (
+                    0,
+                    "Rate limit reached (429). Please wait 1 minute and try again. / 已達API速率上限，請等待1分鐘後再試。",
+                    True,
+                    {},
+                )
+
             if attempt < max_retries - 1:
                 wait = (2 ** attempt) + random.uniform(0, 1)
                 time.sleep(wait)
