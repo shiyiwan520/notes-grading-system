@@ -127,11 +127,12 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
 
     if ai_mode == "auto" and not scan_flag:
         with st.spinner("AI is grading your notes... / AI 評分中，請稍候..."):
-            score, justification, needs_review, _log = grader.grade(text, key_concepts)
+            score, justification, needs_review, log = grader.grade(text, key_concepts)
     else:
         score = ""
         needs_review = True
         justification = "PDF could not be read (possibly scanned image). Manual review required." if scan_flag else ""
+        log = {}
 
     # 步驟4：寫入 Google Sheets
     tw_tz = timezone(timedelta(hours=8))
@@ -151,11 +152,16 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
         "ai_justification": justification,
         "needs_review": needs_review,
         "scan_only": scan_flag,
-        "language_compliance": "",
+        "language_compliance": log.get("language_compliance", ""),
         "is_late": is_late,
         "final_score": "",
         "released": False,
         "submitted_at": submitted_at,
+        "ai_model":            log.get("model_name", ""),
+        "ai_graded_at":        log.get("graded_at", ""),
+        "ai_retry_count":      log.get("retry_count", ""),
+        "ai_request_status":   log.get("request_status", ""),
+        "ai_input_tokens_est": log.get("input_tokens_est", ""),
     }
 
     with st.spinner("Saving submission record... / 儲存繳交紀錄中..."):

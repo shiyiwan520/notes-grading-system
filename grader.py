@@ -386,7 +386,13 @@ def _parse_response(raw: str, language_compliance: str) -> Tuple[int, str, bool,
 
     except Exception as ex:
         logger.error(f"Parse error: {ex} | raw: {raw[:300]}")
-        return 0, f"Could not parse AI response. Manual review required.", True, {}
+        return _make_failed_result(
+            score=0,
+            justification="Could not parse AI response. Manual review required.",
+            needs_review=True,
+            status="parse_error",
+            language_compliance=language_compliance,
+        )
 
 
 def _score_to_grade(weighted: float) -> str:
