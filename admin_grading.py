@@ -199,8 +199,6 @@ def render(semester: str):
             st.rerun()
 
     with col_b:
-        # 可重跑的判斷：ai_score 空白，或上次失敗（rate_limit / failed / parse_error）
-        # 不納入 scan_only（PDF 無法讀取，重跑也沒用）
         RETRIABLE_STATUSES = {"rate_limit", "failed", "parse_error", ""}
         ungrated = [
             r for r in filtered
@@ -262,7 +260,7 @@ def render(semester: str):
                                 "ai_request_status": "scan_only",
                                 "ai_model":          active_model,
                             })
-                            success_count += 1  # 掃描確認也算處理完成
+                            success_count += 1
                             continue
                         sc, just, nr, log = grader.grade(text, key_concepts, model=active_model)
                         storage.update_record(sid, week, semester, {
@@ -437,7 +435,7 @@ def render(semester: str):
                                         "language_compliance":   log.get("language_compliance", ""),
                                     })
                                     if log["request_status"] == "success":
-                                        st.success(f"AI score: {sc}/5")
+                                        st.success(f"AI score: {sc}/5  (model: {log['model_name']})")
                                     else:
                                         st.error(f"AI grading failed ({log['request_status']}): {just}")
                             except Exception as e:

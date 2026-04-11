@@ -30,12 +30,12 @@ import google.generativeai as genai
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
-# 模型設定（可在 admin_settings 覆蓋）
+# 模型設定
 # ─────────────────────────────────────────────
 DEFAULT_MODEL  = "gemini-2.5-flash-lite"
 FALLBACK_MODEL = "gemini-2.5-flash"
 
-# 允許的 model 白名單，防止 settings 存入錯誤值
+# Settings 允許的模型白名單
 _ALLOWED_MODELS = {
     "gemini-2.5-flash-lite",
     "gemini-2.5-flash",
@@ -45,16 +45,17 @@ _ALLOWED_MODELS = {
 
 def get_active_model() -> str:
     """
-    從 storage.get_settings() 讀取 ai_model，
-    若不在白名單內則回退到 DEFAULT_MODEL。
-    在 admin_grading 和 app.py 的每次 grader.grade() 呼叫前使用。
+    從 storage.get_settings() 讀取 ai_model。
+    每次呼叫都重新讀取（storage 有 session_state 快取，
+    老師在 Settings 儲存後快取已同步更新，所以這裡讀到的是最新值）。
+    若設定值不在白名單則退回 DEFAULT_MODEL。
     """
     try:
         import storage as _storage
         model = _storage.get_settings().get("ai_model", DEFAULT_MODEL)
         if model in _ALLOWED_MODELS:
             return model
-        # 舊版 preview 名稱對應到正式名稱
+        # 相容舊 preview 名稱：含 flash-lite 就用 lite，含 flash 就用 flash
         if "flash-lite" in model:
             return "gemini-2.5-flash-lite"
         if "flash" in model:
@@ -229,47 +230,49 @@ def grade(
     對筆記文字進行 AI 評分。
 
     Args:
-        text         : 筆記文字內容
-        key_concepts : 週次關鍵概念提示（可為空）
-        model        : Gemini 模型名稱
-        max_retries  : 最大重試次數（不含 429，遇到立即中止）
+        text         : 筆記文字
+        key_concepts : 週次關鍵概念（可為空）
+        model        : 實際使用的模型名稱，由呼叫端傳入 get_active_model() 的結果
+        max_retries  : 最大重試次數（遇到 429 不重試，立即中止）
 
     Returns:
-        tuple (final_score, justification, needs_review, log)
+        (final_score, justification, needs_review, log)
 
-        final_score  : int，0 = 失敗未評分，2–5 = 正常結果
-                       ⚠️ 0 代表評分失敗，批量重跑邏輯應以 ai_score=="" 或 "0" 判斷未完成
-        justification: str，評語；失敗時包含錯誤原因
-        needs_review : bool
-        log          : dict，固定包含以下 key（失敗時也有，方便 storage.update_record 直接使用）
-                       {
-                         "model_name"       : str,
-                         "graded_at"        : str (ISO datetime or ""),
-                         "retry_count"      : int,
-                         "request_status"   : "success" | "rate_limit" | "parse_error" | "failed" | "skipped",
-                         "input_tokens_est" : int,
-                         "language_compliance": str,
-                       }
+        final_score : int，0 = 失敗未完成評分，2–5 = 正常結果
+        log dict 固定包含：
+          model_name, graded_at, retry_count,
+          request_status, input_tokens_est, language_compliance
+        request_status 值：success / rate_limit / parse_error / failed / skipped
     """
-    now_str = lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    def _now():
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # ── 空內容：跳過，不消耗 API ────────────────
+    def _base_log(model_name, graded_at, retry_count, status, tokens, lang):
+        return {
+            "model_name":          model_name,
+            "graded_at":           graded_at,
+            "retry_count":         retry_count,
+            "request_status":      status,
+            "input_tokens_est":    tokens,
+            "language_compliance": lang,
+        }
+
+    def _fail(score, justification, needs_review, status,
+              model_name=model, retry_count=0, tokens=0, lang=""):
+        return score, justification, needs_review, _base_log(
+            model_name, "", retry_count, status, tokens, lang)
+
+    # ── 空內容 ──────────────────────────────────
     if not text or len(text.strip()) < 10:
-        return _make_failed_result(
-            score=0,
-            justification="Submission is empty or unreadable.",
-            needs_review=False,
-            status="skipped",
-            model_name=model,
-        )
+        return _fail(0, "Submission is empty or unreadable.", False, "skipped")
 
-    # ── 快速語言預檢 ────────────────────────────
-    chinese_ratio = _chinese_ratio(text)
+    # ── 語言預檢 ────────────────────────────────
+    chinese_ratio       = _chinese_ratio(text)
     language_compliance = _detect_language(chinese_ratio)
 
-    # 純中文：直接給 Fair，不呼叫 API
+    # 純中文直接給 Fair，不呼叫 API
     if chinese_ratio > 0.70:
-        log = _base_log(model, now_str(), 0, "success", len(text[:8000]), "chinese_dominant")
+        log = _base_log(model, _now(), 0, "success", len(text[:8000]), "chinese_dominant")
         detail = _build_detail("Fair", 2.0, {
             "A_ai_strategy": 1, "B_knowledge_restructuring": 1,
             "C_learning_material_value": 1, "D_personal_trace": 1,
@@ -280,18 +283,13 @@ def grade(
             "D_evidence": "Cannot assess personal trace in Chinese notes.",
         })
         log.update(detail)
-        return (
-            2,
-            "The notes are primarily written in Chinese. English notes are required.",
-            True,
-            log,
-        )
+        return 2, "The notes are primarily written in Chinese. English notes are required.", True, log
 
-    # ── 截斷，控制費用 ──────────────────────────
-    sample_text = text[:8000]
+    # ── 截斷 ────────────────────────────────────
+    sample_text      = text[:8000]
     input_tokens_est = len(sample_text) // 2
 
-    # ── Gemini API 呼叫 + retry ─────────────────
+    # ── Gemini API 呼叫 ──────────────────────────
     retry_count = 0
     for attempt in range(max_retries):
         retry_count = attempt
@@ -312,11 +310,10 @@ def grade(
             if key_concepts:
                 prompt += f"\n\nKey concepts for this week: {key_concepts}"
 
-            response = gemini_model.generate_content(prompt)
-            raw = response.text.strip()
-
+            response  = gemini_model.generate_content(prompt)
+            raw       = response.text.strip()
             score, justification, needs_review, detail = _parse_response(raw, language_compliance)
-            log = _base_log(used_model, now_str(), retry_count, "success", input_tokens_est, language_compliance)
+            log = _base_log(used_model, _now(), retry_count, "success", input_tokens_est, language_compliance)
             log.update(detail)
             return score, justification, needs_review, log
 
@@ -324,20 +321,17 @@ def grade(
             err_str = str(e)
             logger.warning(f"Gemini API attempt {attempt + 1} failed: {err_str[:120]}")
 
-            # 429 / quota：立即中止，不再 retry，避免加重速率問題
+            # 429：立即中止，不再 retry
             if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
-                return _make_failed_result(
-                    score=0,
-                    justification=(
-                        "Rate limit reached (429). Please wait 1 minute and try again. / "
-                        "已達API速率上限，請等待1分鐘後再試。"
-                    ),
-                    needs_review=True,
-                    status="rate_limit",
+                return _fail(
+                    0,
+                    "Rate limit reached (429). Please wait 1 minute and try again. / "
+                    "已達API速率上限，請等待1分鐘後再試。",
+                    True, "rate_limit",
                     model_name=used_model,
                     retry_count=retry_count,
-                    input_tokens_est=input_tokens_est,
-                    language_compliance=language_compliance,
+                    tokens=input_tokens_est,
+                    lang=language_compliance,
                 )
 
             if attempt < max_retries - 1:
@@ -345,15 +339,13 @@ def grade(
                 time.sleep(wait)
 
     # ── 所有 retry 耗盡 ─────────────────────────
-    return _make_failed_result(
-        score=0,
-        justification="AI grading failed after multiple attempts. Manual review required.",
-        needs_review=True,
-        status="failed",
-        model_name=model,
+    return _fail(
+        0,
+        "AI grading failed after multiple attempts. Manual review required.",
+        True, "failed",
         retry_count=retry_count,
-        input_tokens_est=input_tokens_est,
-        language_compliance=language_compliance,
+        tokens=input_tokens_est,
+        lang=language_compliance,
     )
 
 
@@ -414,12 +406,18 @@ def _parse_response(raw: str, language_compliance: str) -> Tuple[int, str, bool,
 
     except Exception as ex:
         logger.error(f"Parse error: {ex} | raw: {raw[:300]}")
-        return _make_failed_result(
-            score=0,
-            justification="Could not parse AI response. Manual review required.",
-            needs_review=True,
-            status="parse_error",
-            language_compliance=language_compliance,
+        return (
+            0,
+            "Could not parse AI response. Manual review required.",
+            True,
+            {
+                "model_name":          "",
+                "graded_at":           "",
+                "retry_count":         0,
+                "request_status":      "parse_error",
+                "input_tokens_est":    0,
+                "language_compliance": language_compliance,
+            },
         )
 
 
@@ -456,42 +454,6 @@ def _build_detail(grade_str, weighted, dim_scores, lang, soft_ceiling, evidence)
         "soft_ceiling_applied": soft_ceiling,
         "key_evidence": evidence,
     }
-
-
-def _empty_result():
-    # 保留給 grade_compat 向下相容，不應在新流程中被呼叫
-    return 0, "Submission is empty or unreadable.", False, _base_log(DEFAULT_MODEL, "", 0, "skipped", 0, "")
-
-
-def _base_log(model_name, graded_at, retry_count, status, input_tokens_est, language_compliance) -> dict:
-    """建立標準 log dict，確保所有 key 永遠存在"""
-    return {
-        "model_name":          model_name,
-        "graded_at":           graded_at,
-        "retry_count":         retry_count,
-        "request_status":      status,
-        "input_tokens_est":    input_tokens_est,
-        "language_compliance": language_compliance,
-    }
-
-
-def _make_failed_result(
-    score: int,
-    justification: str,
-    needs_review: bool,
-    status: str,
-    model_name: str = DEFAULT_MODEL,
-    retry_count: int = 0,
-    input_tokens_est: int = 0,
-    language_compliance: str = "",
-) -> Tuple[int, str, bool, dict]:
-    """
-    所有失敗路徑的統一出口。
-    score=0 確保批量重跑邏輯（判斷 ai_score=="" 或 ai_request_status!="success"）
-    能正確識別為「尚未完成評分」。
-    """
-    log = _base_log(model_name, "", retry_count, status, input_tokens_est, language_compliance)
-    return score, justification, needs_review, log
 
 
 def _chinese_ratio(text: str) -> float:
