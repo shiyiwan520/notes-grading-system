@@ -54,8 +54,9 @@ def render(semester: str):
     # ── 方法1：貼上 CSV 文字 ──────────────────────────────────
     st.markdown("**Method 1: Paste CSV / 方式一：貼上 CSV 格式文字**")
     st.caption(
-        "Format: student_id,name (no header) / 格式：學號,姓名（每行一筆，不需要表頭）  \n"
-        "Passcode can be added later below. / 驗證碼可以事後在下方單獨設定。"
+        "Format / 格式：student_id,name,passcode（passcode 可留空）  \n"
+        "Two-column format also accepted: student_id,name / 也接受兩欄格式：學號,姓名  \n"
+        "Header row is optional and will be skipped automatically. / 有無表頭均可，系統自動略過。"
     )
     st.warning(
         "⚠️ This will **replace** the entire student list for this semester. "
@@ -66,7 +67,7 @@ def render(semester: str):
     )
     csv_text = st.text_area(
         "Paste here / 貼上文字",
-        placeholder="M1344001,王小明\nM1344002,陳美麗\nM1344003,John Smith",
+        placeholder="M1344001,王小明,0924\nM1344002,陳美麗,\nM1344003,John Smith,1234",
         height=150,
         key="csv_paste"
     )
@@ -75,7 +76,9 @@ def render(semester: str):
             st.error("Please paste some content first. / 請先貼上內容。")
         else:
             with st.spinner("Importing... / 匯入中..."):
-                parsed = _parse_csv_text(csv_text)
+                parsed, parse_errors = _parse_csv_text(csv_text)
+            if parse_errors:
+                st.warning(f"Skipped {len(parse_errors)} invalid row(s): {'; '.join(parse_errors[:3])}")
             if parsed:
                 # 匯入前先確認可以讀取現有名單，失敗就中止
                 existing_check = storage.get_students_safe(semester)
@@ -94,7 +97,7 @@ def render(semester: str):
                     except Exception as save_err:
                         st.error(f"Save failed / 儲存失敗：{save_err}")
             else:
-                st.error("Could not parse. Check format (no header). / 無法解析，請確認格式且無表頭。")
+                st.error("Could not parse any valid rows. Check format. / 無法解析任何有效資料，請確認格式。")
 
     st.divider()
 
@@ -113,38 +116,21 @@ def render(semester: str):
             try:
                 with st.spinner("Reading file... / 讀取檔案中..."):
                     raw = uploaded.read()
-                    # 嘗試多種編碼
+                    text = None
                     for enc in ["utf-8-sig", "utf-8", "big5", "cp950"]:
                         try:
                             text = raw.decode(enc)
                             break
                         except Exception:
-                            text = None
+                            pass
                     if not text:
                         st.error("Cannot decode file. Please save CSV as UTF-8. / 無法解碼檔案，請將 CSV 儲存為 UTF-8 格式。")
                         st.stop()
 
-                    # 移除 BOM
-                    text = text.lstrip("\ufeff").strip()
-                    parsed = []
-                    errors = []
-                    for i, line in enumerate(text.splitlines(), start=1):
-                        line = line.strip()
-                        if not line:
-                            continue
-                        parts = line.split(",", 1)
-                        if len(parts) != 2:
-                            errors.append(f"Row {i}: cannot parse '{line}'")
-                            continue
-                        sid = parts[0].strip().upper()
-                        name = parts[1].strip()
-                        if sid.lower() in ("student_id", "學號", "id"):
-                            continue
-                        if sid and name:
-                            parsed.append({"student_id": sid, "name": name, "passcode": ""})
+                parsed, parse_errors = _parse_csv_text(text)
 
-                if errors:
-                    st.warning(f"Skipped {len(errors)} invalid row(s): {'; '.join(errors[:3])}")
+                if parse_errors:
+                    st.warning(f"Skipped {len(parse_errors)} invalid row(s): {'; '.join(parse_errors[:3])}")
 
                 if parsed:
                     # 匯入前先確認可以讀取現有名單，失敗就中止
@@ -162,8 +148,8 @@ def render(semester: str):
                     st.rerun()
                 else:
                     st.error(
-                        "No valid rows found. Make sure format is: student_id,name (no header, comma separated).\n"
-                        "找不到有效資料。請確認格式為：學號,姓名（無表頭，逗號分隔）。"
+                        "No valid rows found. Make sure format is: student_id,name[,passcode] (comma separated). / "
+                        "找不到有效資料。請確認格式為：學號,姓名[,驗證碼]（逗號分隔）。"
                     )
             except Exception as e:
                 st.error(f"Import failed / 匯入失敗：{e}")
@@ -247,29 +233,53 @@ def render(semester: str):
     st.divider()
 
     # ── CSV 範本下載 ──────────────────────────────────────────
-    template = "M1344001,王小明\nM1344002,陳美麗\nM1344003,John Smith\n"
+    template = "M1344001,王小明,0924\nM1344002,陳美麗,\nM1344003,John Smith,1234\n"
     st.download_button(
         "📥 Download CSV template / 下載 CSV 範本",
         data=template.encode("utf-8-sig"),
         file_name="students_template.csv",
         mime="text/csv"
     )
+    st.caption("Format / 格式：student_id,name,passcode（passcode 可留空）")
 
 
 def _parse_csv_text(text: str):
+    """
+    解析 CSV 文字，支援兩種格式：
+      兩欄：student_id,name
+      三欄：student_id,name,passcode
+    - 有表頭自動略過（student_id/學號/id 開頭的行）
+    - passcode 以字串保留，前導 0 不會消失
+    - 格式不合法的行跳過，不影響其他行
+    回傳 (parsed_list, error_list)
+    """
+    HEADER_IDS = {"student_id", "學號", "id", "sid"}
+    HEADER_NAMES = {"name", "姓名"}
     result = []
+    errors = []
     # 移除 BOM 字元
-    text = text.lstrip('﻿')
-    for line in text.strip().splitlines():
+    text = text.lstrip("\ufeff").lstrip("﻿")
+    for i, line in enumerate(text.strip().splitlines(), start=1):
         line = line.strip()
         if not line:
             continue
-        parts = line.split(",", 1)
-        if len(parts) == 2:
-            sid = parts[0].strip().upper()
-            name = parts[1].strip()
-            if sid.lower() in ("student_id", "學號", "id") or name.lower() in ("name", "姓名"):
-                continue
-            if sid and name:
-                result.append({"student_id": sid, "name": name, "passcode": ""})
-    return result
+        # 最多切成 3 份（支援 name 欄位本身含逗號的情況不在此處理）
+        parts = [p.strip() for p in line.split(",", 2)]
+        if len(parts) < 2:
+            errors.append(f"Row {i}: cannot parse '{line}'")
+            continue
+        sid  = parts[0].upper()
+        name = parts[1]
+        pc   = parts[2] if len(parts) == 3 else ""
+        # 略過表頭行
+        if sid.lower() in HEADER_IDS:
+            continue
+        if name.lower() in HEADER_NAMES:
+            continue
+        if not sid or not name:
+            errors.append(f"Row {i}: empty student_id or name")
+            continue
+        # passcode 以字串儲存，加單引號前綴讓 Sheets 強制視為文字，保留前導 0
+        pc_stored = f"'{pc}" if pc else ""
+        result.append({"student_id": sid, "name": name, "passcode": pc_stored})
+    return result, errors
