@@ -425,7 +425,7 @@ def _parse_response(raw: str, language_compliance: str) -> Tuple[int, str, bool,
         return final_score, justification, needs_review, detail
 
     except Exception as ex:
-        logger.error(f"Parse error: {ex} | raw: {raw[:300]}")
+        logger.error(f"Parse error: {ex} | raw: {raw[:1000]}")
         return (
             0,
             "Could not parse AI response. Manual review required.",
