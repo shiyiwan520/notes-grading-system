@@ -313,8 +313,19 @@ def grade(
             response  = gemini_model.generate_content(prompt)
             raw       = response.text.strip()
             score, justification, needs_review, detail = _parse_response(raw, language_compliance)
-            log = _base_log(used_model, _now(), retry_count, "success", input_tokens_est, language_compliance)
-            log.update(detail)
+
+            # 用 _base_log 建立固定欄位，但依 parse 結果決定 request_status
+            parse_status = detail.get("request_status", "parse_error")
+            log = _base_log(
+                used_model, _now(), retry_count,
+                parse_status,          # 若 parse 失敗用 parse_error，成功用 success
+                input_tokens_est, language_compliance,
+            )
+            # 合併 detail（評分內容），但不讓 detail 覆蓋 model_name / graded_at
+            for k, v in detail.items():
+                if k not in ("model_name", "graded_at", "retry_count",
+                             "request_status", "input_tokens_est", "language_compliance"):
+                    log[k] = v
             return score, justification, needs_review, log
 
         except Exception as e:
@@ -353,9 +364,17 @@ def grade(
 # 內部工具函式
 # ─────────────────────────────────────────────
 def _parse_response(raw: str, language_compliance: str) -> Tuple[int, str, bool, dict]:
-    """解析 Gemini 回傳的 JSON"""
+    """解析 Gemini 回傳的 JSON。
+    flash 系列模型有時在 JSON 前後加說明文字，加強清理邏輯。
+    """
     try:
+        # 1. 移除 markdown code fence
         cleaned = re.sub(r"```json|```", "", raw).strip()
+        # 2. 若仍找不到 JSON，嘗試抽取第一個 { ... } 區塊
+        if not cleaned.startswith("{"):
+            m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if m:
+                cleaned = m.group(0)
         data = json.loads(cleaned)
 
         dim = data.get("dimension_scores", {})
@@ -401,6 +420,7 @@ def _parse_response(raw: str, language_compliance: str) -> Tuple[int, str, bool,
             "C_learning_material_value": c,
             "D_personal_trace": d,
         }, lang, soft_ceiling, evidence)
+        detail["request_status"] = "success"  # 讓呼叫端可以正確判斷是否成功
 
         return final_score, justification, needs_review, detail
 
