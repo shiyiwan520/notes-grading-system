@@ -301,7 +301,7 @@ def grade(
                 model_name=used_model,
                 system_instruction=SYSTEM_PROMPT,
                 generation_config=genai.GenerationConfig(
-                    max_output_tokens=1024,
+                    max_output_tokens=2048,
                     temperature=0.1,
                 ),
             )
@@ -365,16 +365,16 @@ def grade(
 # ─────────────────────────────────────────────
 def _parse_response(raw: str, language_compliance: str) -> Tuple[int, str, bool, dict]:
     """解析 Gemini 回傳的 JSON。
-    flash 系列模型有時在 JSON 前後加說明文字，加強清理邏輯。
+    flash 系列模型有時在 JSON 前後加說明文字或 code fence，加強清理邏輯。
     """
     try:
-        # 1. 移除 markdown code fence
-        cleaned = re.sub(r"```json|```", "", raw).strip()
-        # 2. 若仍找不到 JSON，嘗試抽取第一個 { ... } 區塊
-        if not cleaned.startswith("{"):
-            m = re.search(r"\{.*\}", cleaned, re.DOTALL)
-            if m:
-                cleaned = m.group(0)
+        # 1. 移除 markdown code fence（含前後換行）
+        cleaned = re.sub(r"```json\s*|\s*```", "", raw).strip()
+        # 2. 找第一個 { 到最後一個 } 之間的內容（處理前後有說明文字的情況）
+        start = cleaned.find("{")
+        end   = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            cleaned = cleaned[start:end+1]
         data = json.loads(cleaned)
 
         dim = data.get("dimension_scores", {})
