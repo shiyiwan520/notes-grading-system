@@ -6,43 +6,11 @@ storage.py — Google Sheets + Google Drive 資料存取模組
 import streamlit as st
 import json
 import io
-import time
-import random
 from datetime import datetime
 from typing import Optional, List, Dict
 import gspread
 from google.oauth2.service_account import Credentials
 # Google Drive removed - PDFs stored in Sheets as base64
-
-
-# ─────────────────────────────────────────────
-# Sheets API retry 工具
-# ─────────────────────────────────────────────
-def _sheets_call(fn, max_retries: int = 4):
-    """
-    執行任何 gspread 呼叫，遇到 429 自動等待重試。
-    退避策略：1s → 2s → 4s，最多重試 3 次（共 4 次嘗試）。
-    其他例外直接往上拋。
-    """
-    for attempt in range(max_retries):
-        try:
-            return fn()
-        except gspread.exceptions.APIError as e:
-            status = getattr(e, 'response', None)
-            code = status.status_code if status else 0
-            if code == 429:
-                if attempt < max_retries - 1:
-                    wait = (2 ** attempt) + random.uniform(0, 0.5)
-                    time.sleep(wait)
-                else:
-                    raise RuntimeError(
-                        "Google Sheets rate limit (429) exceeded after retries. "
-                        "Please wait a moment and try again. / "
-                        "Google Sheets 讀寫次數超過限制，請稍候再試。"
-                    ) from e
-            else:
-                raise
-    return None
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -162,30 +130,75 @@ STUDENT_FIELDS = ["semester", "student_id", "name", "passcode"]
 
 @st.cache_data(ttl=5)
 def get_students(semester: str) -> List[Dict]:
-    try:
-        ss = _get_spreadsheet()
-        ws = _get_or_create_ws(ss, SHEET_STUDENTS, STUDENT_FIELDS)
-        return [r for r in ws.get_all_records()
-                if r.get("semester") == semester
-                and str(r.get("student_id", "")).strip() not in ("", "student_id")]
-    except Exception:
-        return []
-
-
-def save_students(semester: str, students: List[Dict]):
+    """
+    讀取學生名單。
+    ⚠️ 失敗時直接拋出例外，不回傳空 []。
+    呼叫端必須自行 try/except，避免把空結果誤當成「名單為空」。
+    """
     ss = _get_spreadsheet()
     ws = _get_or_create_ws(ss, SHEET_STUDENTS, STUDENT_FIELDS)
-    other = [r for r in ws.get_all_records() if r.get("semester") != semester]
-    all_rows = [STUDENT_FIELDS]
-    for r in other:
-        all_rows.append([r.get("semester",""), r.get("student_id",""),
-                         r.get("name",""), r.get("passcode","")])
-    for s in students:
-        all_rows.append([semester, s["student_id"].upper(),
-                         s["name"], s.get("passcode","")])
-    ws.clear()
-    ws.update(all_rows)
-    _invalidate()
+    return [r for r in ws.get_all_records()
+            if r.get("semester") == semester
+            and str(r.get("student_id", "")).strip() not in ("", "student_id")]
+
+
+def get_students_safe(semester: str) -> Optional[List[Dict]]:
+    """
+    讀取學生名單的安全版本，失敗時回傳 None（而非空 []）。
+    讓呼叫端可以區分「讀取失敗」和「名單真的是空的」。
+    """
+    try:
+        return get_students(semester)
+    except Exception:
+        return None
+
+
+def add_student_single(semester: str, student_id: str, name: str, passcode: str = "") -> None:
+    """
+    安全單筆新增學生：直接 append_row，完全不讀取也不覆蓋現有資料。
+    不會觸發 ws.clear()，因此不可能清空整張表。
+    重複學號的檢查必須由呼叫端在 append 前自行完成。
+    """
+    def _do():
+        ss = _get_spreadsheet()
+        ws = _get_or_create_ws(ss, SHEET_STUDENTS, STUDENT_FIELDS)
+        ws.append_row(
+            [semester, student_id.upper(), name, passcode],
+            value_input_option="RAW",
+        )
+        _invalidate()
+    _sheets_call(_do)
+
+
+def save_students(semester: str, students: List[Dict]) -> None:
+    """
+    批量寫入整學期名單（CSV 匯入時使用）。
+    安全保護：
+    1. 先讀取現有全表資料，若讀取失敗則直接拋出例外，絕不執行 ws.clear()
+    2. 確認讀到的 other 行數合理（其他學期資料應 >= 0，無法驗證但至少確保讀取成功）
+    3. 只有讀取成功後才執行 clear + update
+    ⚠️ 此函式僅應用於「整學期名單匯入/取代」，單筆新增請用 add_student_single()
+    """
+    def _do():
+        ss = _get_spreadsheet()
+        ws = _get_or_create_ws(ss, SHEET_STUDENTS, STUDENT_FIELDS)
+        # 先讀取現有資料——若這一步失敗，例外會往上拋，ws.clear() 不會被執行
+        all_existing = ws.get_all_records()
+        # 保留其他學期的資料
+        other = [r for r in all_existing if r.get("semester") != semester]
+        # 組合新的完整資料
+        all_rows = [STUDENT_FIELDS]
+        for r in other:
+            all_rows.append([r.get("semester",""), r.get("student_id",""),
+                             r.get("name",""), r.get("passcode","")])
+        for s in students:
+            all_rows.append([semester, s["student_id"].upper(),
+                             s["name"], s.get("passcode","")])
+        # 確認讀取成功後才清空並寫入
+        ws.clear()
+        ws.update(all_rows, value_input_option="RAW")
+        _invalidate()
+    _sheets_call(_do)
 
 
 def update_student_passcode(semester: str, student_id: str, passcode: str):
@@ -308,12 +321,7 @@ def find_all_records_for_student(student_id: str, semester: str) -> List[Dict]:
 
 
 def save_record(record: Dict, overwrite: bool = False):
-    """
-    寫入一筆 grade 紀錄。
-    遇到 429 自動 retry（由 _sheets_call 處理）。
-    失敗時拋出例外，讓 app.py 的呼叫端決定如何處理。
-    """
-    def _do():
+    try:
         ss = _get_spreadsheet()
         ws = _get_or_create_ws(ss, SHEET_GRADES, GRADE_FIELDS)
         if overwrite:
@@ -327,15 +335,15 @@ def save_record(record: Dict, overwrite: bool = False):
                               [[str(record.get(f, "")) for f in GRADE_FIELDS]],
                               value_input_option="RAW")
                     _invalidate()
-                    return True
+                    return
         ws.append_row([str(record.get(f, "")) for f in GRADE_FIELDS])
         _invalidate()
-        return True
+    except Exception as e:
+        st.error(f"Failed to save record: {e}")
 
-    _sheets_call(_do)  # 失敗時往上拋，不在這裡 st.error
 
 def update_record(student_id: str, week: str, semester: str, updates: Dict):
-    def _do():
+    try:
         ss = _get_spreadsheet()
         ws = _get_or_create_ws(ss, SHEET_GRADES, GRADE_FIELDS)
         for i, r in enumerate(ws.get_all_records(), start=2):
@@ -348,8 +356,6 @@ def update_record(student_id: str, week: str, semester: str, updates: Dict):
                           value_input_option="RAW")
                 _invalidate()
                 return
-    try:
-        _sheets_call(_do)
     except Exception as e:
         st.error(f"Failed to update record: {e}")
 

@@ -13,7 +13,15 @@ def render(semester: str):
         st.info("Please set the current semester in Settings first. / 請先在 Settings 設定目前學期。")
         return
 
-    students = storage.get_students(semester)
+    students = storage.get_students_safe(semester)
+    if students is None:
+        st.error(
+            "❌ Could not load student list (Google Sheets API error). "
+            "Please refresh the page or try again in a moment. "
+            "No changes have been made. / "
+            "無法載入學生名單（Google Sheets API 錯誤），請重新整理頁面或稍後再試。名單未做任何變更。"
+        )
+        return
 
     if students:
         show_passcode_list = st.toggle(
@@ -49,6 +57,13 @@ def render(semester: str):
         "Format: student_id,name (no header) / 格式：學號,姓名（每行一筆，不需要表頭）  \n"
         "Passcode can be added later below. / 驗證碼可以事後在下方單獨設定。"
     )
+    st.warning(
+        "⚠️ This will **replace** the entire student list for this semester. "
+        "Any students added individually (Method 3) will also be overwritten. "
+        "Use this only when importing the full class list. / "
+        "⚠️ 此操作會**取代**本學期的整份學生名單，包含先前用「手動新增單筆」加入的學生。"
+        "請僅在匯入完整班級名單時使用。"
+    )
     csv_text = st.text_area(
         "Paste here / 貼上文字",
         placeholder="M1344001,王小明\nM1344002,陳美麗\nM1344003,John Smith",
@@ -62,6 +77,15 @@ def render(semester: str):
             with st.spinner("Importing... / 匯入中..."):
                 parsed = _parse_csv_text(csv_text)
             if parsed:
+                # 匯入前先確認可以讀取現有名單，失敗就中止
+                existing_check = storage.get_students_safe(semester)
+                if existing_check is None:
+                    st.error(
+                        "❌ Could not read current student list (API error). "
+                        "Import cancelled to protect existing data. Please try again later. / "
+                        "無法讀取現有學生名單（API 錯誤）。為保護現有資料，已取消匯入，請稍後再試。"
+                    )
+                    st.stop()
                 with st.spinner(f"Saving {len(parsed)} students... / 儲存 {len(parsed)} 名學生到雲端..."):
                     try:
                         storage.save_students(semester, parsed)
@@ -76,6 +100,13 @@ def render(semester: str):
 
     # ── 方法2：上傳 CSV 檔案 ──────────────────────────────────
     st.markdown("**Method 2: Upload CSV file / 方式二：上傳 CSV 檔案**")
+    st.warning(
+        "⚠️ This will **replace** the entire student list for this semester. "
+        "Any students added individually (Method 3) will also be overwritten. "
+        "Use this only when importing the full class list. / "
+        "⚠️ 此操作會**取代**本學期的整份學生名單，包含先前用「手動新增單筆」加入的學生。"
+        "請僅在匯入完整班級名單時使用。"
+    )
     uploaded = st.file_uploader("Upload CSV / 上傳 CSV", type=["csv"], key="csv_upload")
     if uploaded:
         if st.button("Import from file / 從檔案匯入", key="import_file"):
@@ -116,6 +147,15 @@ def render(semester: str):
                     st.warning(f"Skipped {len(errors)} invalid row(s): {'; '.join(errors[:3])}")
 
                 if parsed:
+                    # 匯入前先確認可以讀取現有名單，失敗就中止
+                    existing_check = storage.get_students_safe(semester)
+                    if existing_check is None:
+                        st.error(
+                            "❌ Could not read current student list (API error). "
+                            "Import cancelled to protect existing data. Please try again later. / "
+                            "無法讀取現有學生名單（API 錯誤）。為保護現有資料，已取消匯入，請稍後再試。"
+                        )
+                        st.stop()
                     with st.spinner(f"Saving {len(parsed)} students... / 儲存 {len(parsed)} 名學生到雲端..."):
                         storage.save_students(semester, parsed)
                     st.success(f"✅ Imported {len(parsed)} students! / 成功匯入 {len(parsed)} 名學生！")
@@ -143,12 +183,21 @@ def render(semester: str):
             if new_id and new_name:
                 with st.spinner("Saving... / 儲存中..."):
                     try:
-                        existing = storage.get_students(semester)
+                        # 先安全讀取現有名單，用於重複學號檢查
+                        existing = storage.get_students_safe(semester)
+                        if existing is None:
+                            st.error(
+                                "❌ Could not read student list (API error). "
+                                "Please wait a moment and try again. "
+                                "No data was changed. / "
+                                "無法讀取學生名單（API 錯誤），請稍候再試。名單未做任何變更。"
+                            )
+                            st.stop()
                         if any(s["student_id"].upper() == new_id for s in existing):
                             st.warning("⚠️ Student ID already exists. / 學號已存在。")
                         else:
-                            existing.append({"student_id": new_id, "name": new_name, "passcode": ""})
-                            storage.save_students(semester, existing)
+                            # 使用安全的單筆 append，不觸碰其他資料
+                            storage.add_student_single(semester, new_id, new_name)
                             st.success(f"✅ Added {new_id} {new_name}!")
                             st.rerun()
                     except Exception as save_err:
