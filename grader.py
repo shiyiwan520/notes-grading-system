@@ -238,8 +238,8 @@ def grade(
             detail,
         )
 
-    # 只取前 8000 字元，控制費用
-    sample_text = text[:8000]
+    # 只取前 4000 字元（約 3000 tokens），控制費用
+    sample_text = text[:4000]
 
     for attempt in range(max_retries):
         try:

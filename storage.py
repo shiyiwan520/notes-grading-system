@@ -35,6 +35,8 @@ GRADE_FIELDS = [
     # AI request logging
     "ai_model", "ai_graded_at", "ai_retry_count",
     "ai_request_status", "ai_input_tokens_est",
+    # 語言合規
+    "language_compliance",
 ]
 
 # backward-compat alias
