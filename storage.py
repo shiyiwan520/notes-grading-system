@@ -6,11 +6,43 @@ storage.py — Google Sheets + Google Drive 資料存取模組
 import streamlit as st
 import json
 import io
+import time
+import random
 from datetime import datetime
 from typing import Optional, List, Dict
 import gspread
 from google.oauth2.service_account import Credentials
 # Google Drive removed - PDFs stored in Sheets as base64
+
+
+# ─────────────────────────────────────────────
+# Sheets API retry 工具
+# ─────────────────────────────────────────────
+def _sheets_call(fn, max_retries: int = 4):
+    """
+    執行任何 gspread 呼叫，遇到 429 自動等待重試。
+    退避策略：1s → 2s → 4s，最多重試 3 次（共 4 次嘗試）。
+    其他例外直接往上拋。
+    """
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except gspread.exceptions.APIError as e:
+            status = getattr(e, 'response', None)
+            code = status.status_code if status else 0
+            if code == 429:
+                if attempt < max_retries - 1:
+                    wait = (2 ** attempt) + random.uniform(0, 0.5)
+                    time.sleep(wait)
+                else:
+                    raise RuntimeError(
+                        "Google Sheets rate limit (429) exceeded after retries. "
+                        "Please wait a moment and try again. / "
+                        "Google Sheets 讀寫次數超過限制，請稍候再試。"
+                    ) from e
+            else:
+                raise
+    return None
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
