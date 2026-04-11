@@ -161,11 +161,23 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
     with st.spinner("Saving submission record... / 儲存繳交紀錄中..."):
         try:
             storage.save_record(record, overwrite=bool(existing))
+        except RuntimeError as e:
+            # 429 rate limit，提示等待重試，不刪除已上傳的 PDF（等會重試還能用）
+            st.error(
+                "⏳ Google Sheets is temporarily rate-limited. "
+                "**Your PDF has been uploaded successfully.** "
+                "Please wait about 1 minute and click Submit again to complete the process.\n\n"
+                "⏳ Google Sheets 暫時達到讀寫上限。"
+                "**您的 PDF 已上傳成功。** "
+                "請等待約 1 分鐘後再按一次「繳交」按鈕完成記錄。"
+            )
+            return
         except Exception as e:
+            # 其他未知錯誤，刪除已上傳的 PDF 避免孤立檔案
             storage.delete_old_pdf(upload_result["storage_path"])
             st.error(
-                "Failed to save your submission record. The uploaded file has been removed. Please try again.\n"
-                "繳交紀錄儲存失敗，已自動清除上傳的檔案，請稍後再試。"
+                "❌ Failed to save your submission record. The uploaded file has been removed. Please try again.\n\n"
+                "❌ 繳交紀錄儲存失敗，已自動清除上傳的檔案，請稍後再試。"
             )
             return
 

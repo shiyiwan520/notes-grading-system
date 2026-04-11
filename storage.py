@@ -6,11 +6,43 @@ storage.py — Google Sheets + Google Drive 資料存取模組
 import streamlit as st
 import json
 import io
+import time
+import random
 from datetime import datetime
 from typing import Optional, List, Dict
 import gspread
 from google.oauth2.service_account import Credentials
 # Google Drive removed - PDFs stored in Sheets as base64
+
+
+# ─────────────────────────────────────────────
+# Sheets API retry 工具
+# ─────────────────────────────────────────────
+def _sheets_call(fn, max_retries: int = 4):
+    """
+    執行任何 gspread 呼叫，遇到 429 自動等待重試。
+    退避策略：1s → 2s → 4s，最多重試 3 次（共 4 次嘗試）。
+    其他例外直接往上拋。
+    """
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except gspread.exceptions.APIError as e:
+            status = getattr(e, 'response', None)
+            code = status.status_code if status else 0
+            if code == 429:
+                if attempt < max_retries - 1:
+                    wait = (2 ** attempt) + random.uniform(0, 0.5)
+                    time.sleep(wait)
+                else:
+                    raise RuntimeError(
+                        "Google Sheets rate limit (429) exceeded after retries. "
+                        "Please wait a moment and try again. / "
+                        "Google Sheets 讀寫次數超過限制，請稍候再試。"
+                    ) from e
+            else:
+                raise
+    return None
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -276,7 +308,12 @@ def find_all_records_for_student(student_id: str, semester: str) -> List[Dict]:
 
 
 def save_record(record: Dict, overwrite: bool = False):
-    try:
+    """
+    寫入一筆 grade 紀錄。
+    遇到 429 自動 retry（由 _sheets_call 處理）。
+    失敗時拋出例外，讓 app.py 的呼叫端決定如何處理。
+    """
+    def _do():
         ss = _get_spreadsheet()
         ws = _get_or_create_ws(ss, SHEET_GRADES, GRADE_FIELDS)
         if overwrite:
@@ -290,15 +327,15 @@ def save_record(record: Dict, overwrite: bool = False):
                               [[str(record.get(f, "")) for f in GRADE_FIELDS]],
                               value_input_option="RAW")
                     _invalidate()
-                    return
+                    return True
         ws.append_row([str(record.get(f, "")) for f in GRADE_FIELDS])
         _invalidate()
-    except Exception as e:
-        st.error(f"Failed to save record: {e}")
+        return True
 
+    _sheets_call(_do)  # 失敗時往上拋，不在這裡 st.error
 
 def update_record(student_id: str, week: str, semester: str, updates: Dict):
-    try:
+    def _do():
         ss = _get_spreadsheet()
         ws = _get_or_create_ws(ss, SHEET_GRADES, GRADE_FIELDS)
         for i, r in enumerate(ws.get_all_records(), start=2):
@@ -311,6 +348,8 @@ def update_record(student_id: str, week: str, semester: str, updates: Dict):
                           value_input_option="RAW")
                 _invalidate()
                 return
+    try:
+        _sheets_call(_do)
     except Exception as e:
         st.error(f"Failed to update record: {e}")
 
