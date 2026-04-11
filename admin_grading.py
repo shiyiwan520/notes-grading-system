@@ -199,20 +199,29 @@ def render(semester: str):
             st.rerun()
 
     with col_b:
+        # 可重跑的判斷：ai_score 空白，或上次失敗（rate_limit / failed / parse_error）
+        # 不納入 scan_only（PDF 無法讀取，重跑也沒用）
+        RETRIABLE_STATUSES = {"rate_limit", "failed", "parse_error", ""}
         ungrated = [
             r for r in filtered
-            if not str(r.get("ai_score","")).strip()
-            and str(r.get("scan_only","")).lower() not in ("true","1")
+            if str(r.get("scan_only","")).lower() not in ("true","1")
+            and (
+                not str(r.get("ai_score","")).strip()
+                or str(r.get("ai_request_status","")).strip() in RETRIABLE_STATUSES
+            )
+            and str(r.get("ai_request_status","")).strip() != "success"
         ]
         if ungrated:
             st.caption(
-                f"⚠️ {len(ungrated)} ungraded — 7s interval to avoid quota limits. / "
-                f"將逐筆評分，每筆間隔7秒。"
+                f"⚠️ {len(ungrated)} pending/failed — 7s interval to avoid quota limits. / "
+                f"待評分或失敗可重跑，每筆間隔7秒。"
             )
             if st.button(f"🤖 Run AI grading ({len(ungrated)}) / 批量AI評分"):
                 progress = st.progress(0, text="Starting AI grading... / 開始AI評分...")
-                success, failed = 0, 0
+                success_count, failed_count = 0, 0
+                fail_reasons = []
                 BATCH_INTERVAL = 7
+                active_model = grader.get_active_model()
                 for i, rec in enumerate(ungrated):
                     sid          = rec.get("student_id","")
                     week         = rec.get("week","")
@@ -225,47 +234,71 @@ def render(semester: str):
                     )
                     try:
                         signed_url = storage.get_pdf_signed_url(path, expires_in=300) if path else None
-                        if signed_url:
-                            resp = requests.get(signed_url, timeout=30)
-                            if resp.status_code == 200:
-                                text, err = pdf_reader.extract_text_from_bytes(resp.content)
-                                if err or not text.strip():
-                                    storage.update_record(sid, week, semester, {
-                                        "scan_only":             "True",
-                                        "needs_review":          "True",
-                                        "ai_justification":      "PDF could not be read. Manual review required.",
-                                        "teacher_justification": "",
-                                        "ai_request_status":     "failed",
-                                        "ai_model":              grader.DEFAULT_MODEL,
-                                    })
-                                else:
-                                    score, justification, needs_review, log = grader.grade(text, key_concepts)
-                                    storage.update_record(sid, week, semester, {
-                                        "ai_score":              str(score),
-                                        "ai_justification":      justification,
-                                        "needs_review":          str(needs_review),
-                                        "teacher_justification": "",
-                                        "ai_model":              log["model_name"],
-                                        "ai_graded_at":          log["graded_at"],
-                                        "ai_retry_count":        str(log["retry_count"]),
-                                        "ai_request_status":     log["request_status"],
-                                        "ai_input_tokens_est":   str(log["input_tokens_est"]),
-                                        "language_compliance":   log.get("language_compliance", ""),
-                                    })
-                                success += 1
-                            else:
-                                failed += 1
+                        if not signed_url:
+                            storage.update_record(sid, week, semester, {
+                                "ai_request_status": "failed",
+                                "ai_justification":  "Could not generate PDF URL.",
+                                "needs_review":      "True",
+                            })
+                            failed_count += 1
+                            fail_reasons.append(f"{sid} W{week}: no PDF URL")
+                            continue
+                        resp = requests.get(signed_url, timeout=30)
+                        if resp.status_code != 200:
+                            storage.update_record(sid, week, semester, {
+                                "ai_request_status": "failed",
+                                "ai_justification":  f"PDF download failed (HTTP {resp.status_code}).",
+                                "needs_review":      "True",
+                            })
+                            failed_count += 1
+                            fail_reasons.append(f"{sid} W{week}: HTTP {resp.status_code}")
+                            continue
+                        text, err = pdf_reader.extract_text_from_bytes(resp.content)
+                        if err or not text.strip():
+                            storage.update_record(sid, week, semester, {
+                                "scan_only":         "True",
+                                "needs_review":      "True",
+                                "ai_justification":  "PDF could not be read. Manual review required.",
+                                "ai_request_status": "scan_only",
+                                "ai_model":          active_model,
+                            })
+                            success_count += 1  # 掃描確認也算處理完成
+                            continue
+                        sc, just, nr, log = grader.grade(text, key_concepts, model=active_model)
+                        storage.update_record(sid, week, semester, {
+                            "ai_score":              str(sc),
+                            "ai_justification":      just,
+                            "needs_review":          str(nr),
+                            "teacher_justification": "",
+                            "ai_model":              log["model_name"],
+                            "ai_graded_at":          log["graded_at"],
+                            "ai_retry_count":        str(log["retry_count"]),
+                            "ai_request_status":     log["request_status"],
+                            "ai_input_tokens_est":   str(log["input_tokens_est"]),
+                            "language_compliance":   log.get("language_compliance", ""),
+                        })
+                        if log["request_status"] == "success":
+                            success_count += 1
                         else:
-                            failed += 1
-                    except Exception:
-                        failed += 1
+                            failed_count += 1
+                            fail_reasons.append(f"{sid} W{week}: {log['request_status']}")
+                    except Exception as e:
+                        storage.update_record(sid, week, semester, {
+                            "ai_request_status": "failed",
+                            "ai_justification":  f"Unexpected error: {str(e)[:120]}",
+                            "needs_review":      "True",
+                        })
+                        failed_count += 1
+                        fail_reasons.append(f"{sid} W{week}: exception")
                     if i < len(ungrated) - 1:
                         time.sleep(BATCH_INTERVAL)
                 progress.empty()
                 st.success(
-                    f"✅ AI grading done: {success} success, {failed} failed. / "
-                    f"完成：{success} 成功，{failed} 失敗。"
+                    f"✅ Done: {success_count} success, {failed_count} failed. / "
+                    f"完成：{success_count} 成功，{failed_count} 失敗。"
                 )
+                if fail_reasons:
+                    st.warning("Failed records / 失敗紀錄：\n" + "\n".join(fail_reasons))
                 st.rerun()
 
     with col_c:
@@ -372,6 +405,7 @@ def render(semester: str):
                 if not scan_only:
                     if st.button("🤖 Run AI now / 立即AI評分", key=f"ai_now_{idx}"):
                         with st.spinner("AI grading... / AI評分中..."):
+                            active_model = grader.get_active_model()
                             week_config  = storage.get_week_config(semester, week)
                             key_concepts = week_config.get("key_concepts","") if week_config else ""
                             try:
@@ -384,10 +418,12 @@ def render(semester: str):
                                         "needs_review":          "True",
                                         "ai_justification":      "PDF could not be read. Manual review required.",
                                         "teacher_justification": "",
+                                        "ai_request_status":     "scan_only",
+                                        "ai_model":              active_model,
                                     })
                                     st.warning("Scanned PDF detected.")
                                 else:
-                                    sc, just, nr, log = grader.grade(text, key_concepts)
+                                    sc, just, nr, log = grader.grade(text, key_concepts, model=active_model)
                                     storage.update_record(sid, week, semester, {
                                         "ai_score":              str(sc),
                                         "ai_justification":      just,
@@ -400,7 +436,10 @@ def render(semester: str):
                                         "ai_input_tokens_est":   str(log["input_tokens_est"]),
                                         "language_compliance":   log.get("language_compliance", ""),
                                     })
-                                    st.success(f"AI score: {sc}/5")
+                                    if log["request_status"] == "success":
+                                        st.success(f"AI score: {sc}/5")
+                                    else:
+                                        st.error(f"AI grading failed ({log['request_status']}): {just}")
                             except Exception as e:
                                 st.error(f"AI grading failed: {e}")
                         if f"just_{sid}_{week}" in st.session_state:

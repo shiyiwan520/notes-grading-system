@@ -32,8 +32,36 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────
 # 模型設定（可在 admin_settings 覆蓋）
 # ─────────────────────────────────────────────
-DEFAULT_MODEL = "gemini-2.5-flash-lite-preview-06-17"
+DEFAULT_MODEL  = "gemini-2.5-flash-lite"
 FALLBACK_MODEL = "gemini-2.5-flash"
+
+# 允許的 model 白名單，防止 settings 存入錯誤值
+_ALLOWED_MODELS = {
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite-preview-06-17",  # 向下相容舊設定值
+}
+
+
+def get_active_model() -> str:
+    """
+    從 storage.get_settings() 讀取 ai_model，
+    若不在白名單內則回退到 DEFAULT_MODEL。
+    在 admin_grading 和 app.py 的每次 grader.grade() 呼叫前使用。
+    """
+    try:
+        import storage as _storage
+        model = _storage.get_settings().get("ai_model", DEFAULT_MODEL)
+        if model in _ALLOWED_MODELS:
+            return model
+        # 舊版 preview 名稱對應到正式名稱
+        if "flash-lite" in model:
+            return "gemini-2.5-flash-lite"
+        if "flash" in model:
+            return "gemini-2.5-flash"
+    except Exception:
+        pass
+    return DEFAULT_MODEL
 
 # ─────────────────────────────────────────────
 # 系統 Prompt（校正版）
