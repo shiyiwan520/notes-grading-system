@@ -232,14 +232,19 @@ if page == "📤 Submit Notes / 繳交作業":
     current_semester = settings.get("current_semester", "")
 
     if not current_semester:
-        # 區分兩種情況：真的未設定 vs 暫時讀取失敗
-        # get_settings() 若 Sheets 失敗且無快取會回傳 {}，
-        # 此時 settings 是空 dict（不含任何 key），無法判斷是否真的未設定
-        # 顯示較友善的提示，避免讓學生以為系統永久壞掉
+        # 第一次讀取失敗（可能是 Sheets 429 暫時限流）
+        # 自動等待 2 秒後重試一次，不讓學生看到誤導性錯誤訊息
+        import time as _time
+        _time.sleep(2)
+        storage._invalidate_settings_cache()
+        settings = storage.get_settings()
+        current_semester = settings.get("current_semester", "")
+
+    if not current_semester:
+        # 重試後仍失敗，才顯示錯誤（此時確實是系統問題，不是老師未設定）
         st.warning(
-            "⚙️ Unable to load submission settings. This may be a temporary issue.  \n"
-            "Please wait a moment and refresh the page. If the problem persists, contact your teacher.  \n"
-            "⚙️ 無法載入繳交設定，可能是暫時性問題。請稍候後重新整理頁面，若持續無法使用請聯絡老師。"
+            "⚙️ The system is temporarily unavailable. Please refresh the page in a moment.  \n"
+            "⚙️ 系統暫時無法連線，請稍候後重新整理頁面即可繼續繳交。"
         )
         st.stop()
 

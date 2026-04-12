@@ -88,6 +88,12 @@ def _invalidate():
     st.cache_data.clear()
 
 
+def _invalidate_settings_cache():
+    """只清除 settings 快取，讓下次 get_settings() 重新從 Sheets 讀取。"""
+    if "settings_cache" in st.session_state:
+        del st.session_state["settings_cache"]
+
+
 # ── Settings ──────────────────────────────────────────────────
 
 def get_settings() -> Dict:
