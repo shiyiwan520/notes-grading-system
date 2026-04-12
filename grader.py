@@ -29,7 +29,6 @@ import google.genai as genai
 from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
-print("GRADER_VERSION = 2026-04-12-genai-lite-fixed")
 
 # ─────────────────────────────────────────────
 # 模型設定（暫時固定，不開放切換）
@@ -153,7 +152,8 @@ Return ONLY a valid JSON object. No preamble, no markdown, no explanation outsid
   "weighted_score": <float, 1 decimal place>,
   "grade": "<Excellent | Very Good | Good | Fair>",
   "language_compliance": "<chinese_dominant | mixed | english_compliant>",
-  "needs_review": <true | false>
+  "needs_review": <true | false>,
+  "brief_reason": "<ONE sentence only: state the main strength, then the main weakness. Max 25 words.>"
 }
 
 Set needs_review = true when:
@@ -366,7 +366,8 @@ def _parse_response(raw: str, language_compliance: str) -> Tuple[int, str, bool,
             needs_review = True
 
         # 組合評語
-        justification = _build_justification(grade_str, weighted, a, b, c, d)
+        brief_reason  = str(data.get("brief_reason", "")).strip()[:150]  # 硬性截斷保險
+        justification = _build_justification(grade_str, weighted, a, b, c, d, brief_reason)
 
         final_score = GRADE_TO_SCORE.get(grade_str, 2)
         detail = {
@@ -412,12 +413,14 @@ def _score_to_grade(weighted: float) -> str:
         return "Fair"
 
 
-def _build_justification(grade_str, weighted, a, b, c, d) -> str:
+def _build_justification(grade_str, weighted, a, b, c, d, brief_reason: str = "") -> str:
     lines = [
         f"Grade: {grade_str} (Weighted Score: {weighted}/5.0)",
         f"A-Prompt Strategy: {a}/5 | B-Knowledge Restructuring: {b}/5 | "
         f"C-Learning Value: {c}/5 | D-Personal Trace: {d}/5",
     ]
+    if brief_reason:
+        lines.append(brief_reason)
     return " | ".join(lines)
 
 
