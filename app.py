@@ -134,29 +134,29 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
         justification = "PDF could not be read (possibly scanned image). Manual review required." if scan_flag else ""
         log = {}
 
-    # 步驟4：寫入 Google Sheets
+    # 步驟4：寫入 Supabase Database
     tw_tz = timezone(timedelta(hours=8))
     submitted_at = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
     record = {
-        "semester": semester,
-        "student_id": student_id,
-        "name": student_name,
-        "week": week,
-        "original_filename": uploaded_file.name,
-        "file_size_bytes": file_size,
-        "storage_bucket": storage.SUPABASE_BUCKET,
-        "storage_path": upload_result["storage_path"],
-        "file_url": upload_result["file_url"],
-        "replaced_previous": bool(existing),
-        "ai_score": score,
-        "ai_justification": justification,
-        "needs_review": needs_review,
-        "scan_only": scan_flag,
+        "semester":            semester,
+        "student_id":          student_id,
+        "name":                student_name,
+        "week":                week,
+        "original_filename":   uploaded_file.name,
+        "file_size_bytes":     file_size,
+        "storage_bucket":      storage.SUPABASE_BUCKET,
+        "storage_path":        upload_result["storage_path"],
+        "file_url":            upload_result["file_url"],
+        "replaced_previous":   bool(existing),
+        "ai_score":            score,
+        "ai_justification":    justification,
+        "needs_review":        needs_review,
+        "scan_only":           scan_flag,
         "language_compliance": log.get("language_compliance", ""),
-        "is_late": is_late,
-        "final_score": "",
-        "released": False,
-        "submitted_at": submitted_at,
+        "is_late":             is_late,
+        "final_score":         "",
+        "released":            False,
+        "submitted_at":        submitted_at,
         "ai_model":            log.get("model_name", ""),
         "ai_graded_at":        log.get("graded_at", ""),
         "ai_retry_count":      log.get("retry_count", ""),
@@ -230,27 +230,9 @@ if page == "📤 Submit Notes / 繳交作業":
     # ── 取得目前學期與開放週次 ────────────────────────────────
     settings = storage.get_settings()
     current_semester = settings.get("current_semester", "")
+    open_weeks = storage.get_open_weeks(current_semester)  # list of {"week": "01", "deadline": ""}
 
-    if not current_semester:
-        # 第一次讀取失敗（可能是 Sheets 429 暫時限流）
-        # 自動等待 2 秒後重試一次，不讓學生看到誤導性錯誤訊息
-        import time as _time
-        _time.sleep(2)
-        storage._invalidate_settings_cache()
-        settings = storage.get_settings()
-        current_semester = settings.get("current_semester", "")
-
-    if not current_semester:
-        # 重試後仍失敗，才顯示錯誤（此時確實是系統問題，不是老師未設定）
-        st.warning(
-            "⚙️ The system is temporarily unavailable. Please refresh the page in a moment.  \n"
-            "⚙️ 系統暫時無法連線，請稍候後重新整理頁面即可繼續繳交。"
-        )
-        st.stop()
-
-    open_weeks = storage.get_open_weeks(current_semester)
-
-    if not open_weeks:
+    if not current_semester or not open_weeks:
         st.warning(
             "No weeks are currently open for submission.  \n"
             "目前沒有開放繳交的週次，請稍後再試或聯絡老師。"
@@ -310,15 +292,20 @@ if page == "📤 Submit Notes / 繳交作業":
     if student_id:
         if student_id_raw.strip() != student_id:
             st.caption(f"ℹ️ Student ID auto-corrected to uppercase / 學號已自動轉為大寫：**{student_id}**")
-        students = storage.get_students(current_semester)
-        valid_ids = [s["student_id"].upper() for s in students]
-        if valid_ids and student_id not in valid_ids:
-            st.warning(
-                f"⚠️ Student ID **{student_id}** not found in the class list.  \n"
-                "學號查無此人，請確認後再試。"
-            )
+        students = storage.get_students_safe(current_semester)
+        if students is None:
+            st.warning("⚠️ Cannot verify student ID right now. Please try again. / 目前無法驗證學號，請稍後再試。")
+        elif len(students) == 0:
+            st.warning("⚠️ No student list found. Please contact your teacher. / 尚未建立學生名單，請聯絡老師。")
         else:
-            id_valid = True
+            valid_ids = [s["student_id"].upper() for s in students]
+            if student_id not in valid_ids:
+                st.warning(
+                    f"⚠️ Student ID **{student_id}** not found in the class list.  \n"
+                    "學號查無此人，請確認後再試。"
+                )
+            else:
+                id_valid = True
 
     st.divider()
 
