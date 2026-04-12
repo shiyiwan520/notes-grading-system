@@ -31,39 +31,10 @@ from google.genai import types as genai_types
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
-# 模型設定
+# 模型設定（暫時固定，不開放切換）
 # ─────────────────────────────────────────────
-DEFAULT_MODEL  = "gemini-2.5-flash-lite"
-FALLBACK_MODEL = "gemini-2.5-flash"
-
-# Settings 允許的模型白名單
-_ALLOWED_MODELS = {
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite-preview-06-17",  # 向下相容舊設定值
-}
-
-
-def get_active_model() -> str:
-    """
-    從 storage.get_settings() 讀取 ai_model。
-    每次呼叫都重新讀取（storage 有 session_state 快取，
-    老師在 Settings 儲存後快取已同步更新，所以這裡讀到的是最新值）。
-    若設定值不在白名單則退回 DEFAULT_MODEL。
-    """
-    try:
-        import storage as _storage
-        model = _storage.get_settings().get("ai_model", DEFAULT_MODEL)
-        if model in _ALLOWED_MODELS:
-            return model
-        # 相容舊 preview 名稱：含 flash-lite 就用 lite，含 flash 就用 flash
-        if "flash-lite" in model:
-            return "gemini-2.5-flash-lite"
-        if "flash" in model:
-            return "gemini-2.5-flash"
-    except Exception:
-        pass
-    return DEFAULT_MODEL
+FIXED_MODEL   = "gemini-2.5-flash-lite"
+DEFAULT_MODEL = FIXED_MODEL  # 向下相容，grade_compat() 等地方仍用此名稱
 
 # ─────────────────────────────────────────────
 # 系統 Prompt（校正版）
@@ -216,17 +187,11 @@ GRADE_TO_SCORE = {
 def grade(
     text: str,
     key_concepts: str = "",
-    model: str = DEFAULT_MODEL,
     max_retries: int = 3,
 ) -> Tuple[int, str, bool, dict]:
     """
     對筆記文字進行 AI 評分。
-
-    Args:
-        text         : 筆記文字
-        key_concepts : 週次關鍵概念（可為空）
-        model        : 實際使用的模型名稱，由呼叫端傳入 get_active_model() 的結果
-        max_retries  : 最大重試次數（遇到 429 不重試，立即中止）
+    模型固定為 FIXED_MODEL（gemini-2.5-flash-lite），不接受外部傳入。
 
     Returns:
         (final_score, justification, needs_review, log)
@@ -237,6 +202,7 @@ def grade(
           request_status, input_tokens_est, language_compliance
         request_status 值：success / rate_limit / parse_error / failed / skipped
     """
+    model = FIXED_MODEL
     def _now():
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -285,7 +251,7 @@ def grade(
         retry_count = attempt
         try:
             client     = genai.Client(api_key=os.getenv("GEMINI_API_KEY", ""))
-            used_model = model if attempt == 0 else FALLBACK_MODEL
+            used_model = FIXED_MODEL
 
             prompt = f"Please grade the following student English notes:\n\n---\n{sample_text}\n---"
             if key_concepts:
@@ -474,10 +440,10 @@ def _detect_language(ratio: float) -> str:
 # ─────────────────────────────────────────────
 # 向下相容包裝（舊版 admin_grading.py 呼叫用）
 # ─────────────────────────────────────────────
-def grade_compat(text: str, model: str = DEFAULT_MODEL) -> Tuple[int, str, bool]:
+def grade_compat(text: str) -> Tuple[int, str, bool]:
     """
     舊版相容介面：只回傳 (score, justification, needs_review)
     給尚未更新的 admin_grading.py 使用。
     """
-    score, justification, needs_review, _ = grade(text, model=model)
+    score, justification, needs_review, _ = grade(text)
     return score, justification, needs_review

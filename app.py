@@ -127,8 +127,7 @@ def _process_submission(student_id, student_name, week, semester, uploaded_file,
 
     if ai_mode == "auto" and not scan_flag:
         with st.spinner("AI is grading your notes... / AI 評分中，請稍候..."):
-            active_model = grader.get_active_model()
-            score, justification, needs_review, log = grader.grade(text, key_concepts, model=active_model)
+            score, justification, needs_review, log = grader.grade(text, key_concepts)
     else:
         score = ""
         needs_review = True

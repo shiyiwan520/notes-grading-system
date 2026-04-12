@@ -70,29 +70,10 @@ def render(settings: dict):
 
     # ── AI 模型選擇 ───────────────────────────────────────────
     st.markdown("**AI Model / AI 模型選擇**")
-    st.caption(
-        "Flash-Lite: cheaper, faster, sufficient for note grading. "
-        "Flash: more capable but higher cost. "
-        "Flash-Lite 夠用且便宜；Flash 能力更強但費用較高。"
+    st.info(
+        "Currently fixed: **gemini-2.5-flash-lite** / 目前固定使用：**gemini-2.5-flash-lite**\n\n"
+        "Model switching is temporarily disabled for stability. / 模型切換功能暫時停用，以確保評分穩定性。"
     )
-    MODEL_OPTIONS = [
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-flash",
-    ]
-    current_model = settings.get("ai_model", "gemini-2.5-flash-lite")
-    if current_model not in MODEL_OPTIONS:
-        current_model = "gemini-2.5-flash-lite"
-    st.info(f"Currently active model / 目前使用中的模型：**{current_model}**")
-    new_model = st.selectbox(
-        "AI model / 模型",
-        options=MODEL_OPTIONS,
-        index=MODEL_OPTIONS.index(current_model),
-        key="ai_model_select"
-    )
-    if st.button("Save model / 儲存模型", key="save_ai_model"):
-        storage.save_setting("ai_model", new_model)
-        st.success(f"Saved! / 已儲存：{new_model}")
-        st.rerun()
 
     st.divider()
 
