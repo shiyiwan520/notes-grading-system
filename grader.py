@@ -29,6 +29,7 @@ import google.genai as genai
 from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
+print("GRADER_VERSION = 2026-04-12-genai-lite-fixed")
 
 # ─────────────────────────────────────────────
 # 模型設定
