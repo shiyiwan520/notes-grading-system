@@ -25,7 +25,8 @@ import logging
 from datetime import datetime
 from typing import Tuple
 
-import google.generativeai as genai
+import google.genai as genai
+from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
 
@@ -179,16 +180,8 @@ Return ONLY a valid JSON object. No preamble, no markdown, no explanation outsid
   },
   "weighted_score": <float, 1 decimal place>,
   "grade": "<Excellent | Very Good | Good | Fair>",
-  "soft_ceiling_applied": <true | false>,
   "language_compliance": "<chinese_dominant | mixed | english_compliant>",
-  "key_evidence": {
-    "A_evidence": "<1-2 sentences citing specific prompt features or their absence>",
-    "B_evidence": "<1-2 sentences citing specific restructuring techniques observed>",
-    "C_evidence": "<1-2 sentences on usability and coverage>",
-    "D_evidence": "<1-2 sentences citing specific personal trace evidence or its absence>"
-  },
-  "needs_review": <true | false>,
-  "needs_review_reason": "<brief reason if needs_review is true, else null>"
+  "needs_review": <true | false>
 }
 
 Set needs_review = true when:
@@ -273,16 +266,13 @@ def grade(
     # 純中文直接給 Fair，不呼叫 API
     if chinese_ratio > 0.70:
         log = _base_log(model, _now(), 0, "success", len(text[:8000]), "chinese_dominant")
-        detail = _build_detail("Fair", 2.0, {
-            "A_ai_strategy": 1, "B_knowledge_restructuring": 1,
-            "C_learning_material_value": 1, "D_personal_trace": 1,
-        }, "chinese_dominant", False, {
-            "A_evidence": "Notes are primarily in Chinese; no English prompt detected.",
-            "B_evidence": "Cannot assess English restructuring quality.",
-            "C_evidence": "Notes do not meet the English language requirement.",
-            "D_evidence": "Cannot assess personal trace in Chinese notes.",
+        log.update({
+            "grade": "Fair", "weighted_score": 2.0,
+            "dimension_scores": {
+                "A_ai_strategy": 1, "B_knowledge_restructuring": 1,
+                "C_learning_material_value": 1, "D_personal_trace": 1,
+            },
         })
-        log.update(detail)
         return 2, "The notes are primarily written in Chinese. English notes are required.", True, log
 
     # ── 截斷 ────────────────────────────────────
@@ -294,24 +284,23 @@ def grade(
     for attempt in range(max_retries):
         retry_count = attempt
         try:
-            genai.configure(api_key=os.getenv("GEMINI_API_KEY", ""))
+            client     = genai.Client(api_key=os.getenv("GEMINI_API_KEY", ""))
             used_model = model if attempt == 0 else FALLBACK_MODEL
-
-            gemini_model = genai.GenerativeModel(
-                model_name=used_model,
-                system_instruction=SYSTEM_PROMPT,
-                generation_config=genai.GenerationConfig(
-                    max_output_tokens=2048,
-                    temperature=0.1,
-                ),
-            )
 
             prompt = f"Please grade the following student English notes:\n\n---\n{sample_text}\n---"
             if key_concepts:
                 prompt += f"\n\nKey concepts for this week: {key_concepts}"
 
-            response  = gemini_model.generate_content(prompt)
-            raw       = response.text.strip()
+            response = client.models.generate_content(
+                model=used_model,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    max_output_tokens=2048,
+                    temperature=0.1,
+                ),
+            )
+            raw = response.text.strip()
             score, justification, needs_review, detail = _parse_response(raw, language_compliance)
 
             # 用 _base_log 建立固定欄位，但依 parse 結果決定 request_status
@@ -396,14 +385,13 @@ def _parse_response(raw: str, language_compliance: str) -> Tuple[int, str, bool,
                 grade_str = "Good"
 
         # 覆蓋 Gemini 自己判斷的 grade（以我們計算為準）
-        lang = data.get("language_compliance", language_compliance)
-        evidence = data.get("key_evidence", {})
+        lang         = data.get("language_compliance", language_compliance)
         needs_review = bool(data.get("needs_review", False))
 
         # 額外的 needs_review 觸發條件
-        if weighted >= 3.3 and weighted <= 3.7:
+        if 3.3 <= weighted <= 3.7:
             needs_review = True
-        if weighted >= 4.3 and weighted <= 4.7:
+        if 4.3 <= weighted <= 4.7:
             needs_review = True
         if max(a, b, c, d) - min(a, b, c, d) >= 3:
             needs_review = True
@@ -411,16 +399,21 @@ def _parse_response(raw: str, language_compliance: str) -> Tuple[int, str, bool,
             needs_review = True
 
         # 組合評語
-        justification = _build_justification(grade_str, weighted, a, b, c, d, evidence)
+        justification = _build_justification(grade_str, weighted, a, b, c, d)
 
         final_score = GRADE_TO_SCORE.get(grade_str, 2)
-        detail = _build_detail(grade_str, weighted, {
-            "A_ai_strategy": a,
-            "B_knowledge_restructuring": b,
-            "C_learning_material_value": c,
-            "D_personal_trace": d,
-        }, lang, soft_ceiling, evidence)
-        detail["request_status"] = "success"  # 讓呼叫端可以正確判斷是否成功
+        detail = {
+            "grade":          grade_str,
+            "weighted_score": weighted,
+            "dimension_scores": {
+                "A_ai_strategy":            a,
+                "B_knowledge_restructuring": b,
+                "C_learning_material_value": c,
+                "D_personal_trace":          d,
+            },
+            "language_compliance": lang,
+            "request_status":      "success",
+        }
 
         return final_score, justification, needs_review, detail
 
@@ -452,28 +445,13 @@ def _score_to_grade(weighted: float) -> str:
         return "Fair"
 
 
-def _build_justification(grade_str, weighted, a, b, c, d, evidence) -> str:
+def _build_justification(grade_str, weighted, a, b, c, d) -> str:
     lines = [
         f"Grade: {grade_str} (Weighted Score: {weighted}/5.0)",
         f"A-Prompt Strategy: {a}/5 | B-Knowledge Restructuring: {b}/5 | "
         f"C-Learning Value: {c}/5 | D-Personal Trace: {d}/5",
     ]
-    if evidence.get("B_evidence"):
-        lines.append(f"Restructuring: {evidence['B_evidence']}")
-    if evidence.get("A_evidence"):
-        lines.append(f"Prompt: {evidence['A_evidence']}")
-    return " | ".join(lines)[:600]
-
-
-def _build_detail(grade_str, weighted, dim_scores, lang, soft_ceiling, evidence) -> dict:
-    return {
-        "grade": grade_str,
-        "weighted_score": weighted,
-        "dimension_scores": dim_scores,
-        "language_compliance": lang,
-        "soft_ceiling_applied": soft_ceiling,
-        "key_evidence": evidence,
-    }
+    return " | ".join(lines)
 
 
 def _chinese_ratio(text: str) -> float:
@@ -501,5 +479,5 @@ def grade_compat(text: str, model: str = DEFAULT_MODEL) -> Tuple[int, str, bool]
     舊版相容介面：只回傳 (score, justification, needs_review)
     給尚未更新的 admin_grading.py 使用。
     """
-    score, justification, needs_review, _ = grade(text, model)
+    score, justification, needs_review, _ = grade(text, model=model)
     return score, justification, needs_review

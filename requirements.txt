@@ -1,5 +1,5 @@
 streamlit>=1.35.0
-google-generativeai>=0.7.0
+google-genai
 gspread>=6.0.0
 google-auth>=2.28.0
 google-api-python-client>=2.120.0
