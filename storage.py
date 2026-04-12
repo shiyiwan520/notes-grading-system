@@ -6,43 +6,11 @@ storage.py — Google Sheets + Google Drive 資料存取模組
 import streamlit as st
 import json
 import io
-import time
-import random
 from datetime import datetime
 from typing import Optional, List, Dict
 import gspread
 from google.oauth2.service_account import Credentials
 # Google Drive removed - PDFs stored in Sheets as base64
-
-
-# ─────────────────────────────────────────────
-# Sheets API retry 工具
-# ─────────────────────────────────────────────
-def _sheets_call(fn, max_retries: int = 4):
-    """
-    執行任何 gspread 呼叫，遇到 429 自動等待重試。
-    退避策略：1s → 2s → 4s，最多重試 3 次（共 4 次嘗試）。
-    其他例外直接往上拋。
-    """
-    for attempt in range(max_retries):
-        try:
-            return fn()
-        except gspread.exceptions.APIError as e:
-            status = getattr(e, 'response', None)
-            code = status.status_code if status else 0
-            if code == 429:
-                if attempt < max_retries - 1:
-                    wait = (2 ** attempt) + random.uniform(0, 0.5)
-                    time.sleep(wait)
-                else:
-                    raise RuntimeError(
-                        "Google Sheets rate limit (429) exceeded after retries. "
-                        "Please wait a moment and try again. / "
-                        "Google Sheets 讀寫次數超過限制，請稍候再試。"
-                    ) from e
-            else:
-                raise
-    return None
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -123,21 +91,41 @@ def _invalidate():
 # ── Settings ──────────────────────────────────────────────────
 
 def get_settings() -> Dict:
+    """
+    讀取系統設定。
+    使用 session_state 快取避免重複呼叫 Sheets API。
+    安全保護：若 Sheets 讀取失敗，保留上次有效快取，不以空值覆蓋。
+    """
     if "settings_cache" not in st.session_state:
-        st.session_state.settings_cache = _fetch_settings()
+        result = _fetch_settings()
+        if result is not None:
+            st.session_state.settings_cache = result
+        else:
+            # 讀取失敗且沒有任何快取：回傳空 dict 但不存入 session_state
+            # 下次呼叫會再嘗試讀取
+            return {}
     return st.session_state.settings_cache
 
 
-def _fetch_settings() -> Dict:
+def _fetch_settings() -> Optional[Dict]:
+    """
+    從 Sheets 讀取設定。
+    成功：回傳 dict（可能是空 dict，代表設定表是空的）
+    失敗（API 錯誤）：回傳 None，讓呼叫端決定如何處理
+    """
     try:
         ss = _get_spreadsheet()
         ws = _get_or_create_ws(ss, SHEET_SETTINGS, ["key", "value"])
         return {r["key"]: r["value"] for r in ws.get_all_records() if r.get("key")}
     except Exception:
-        return {}
+        return None
 
 
 def save_setting(key: str, value: str):
+    """
+    儲存單筆設定到 Sheets，同時更新 session_state 快取。
+    失敗時拋出例外，讓呼叫端（admin_settings.py）能顯示錯誤。
+    """
     try:
         ss = _get_spreadsheet()
         ws = _get_or_create_ws(ss, SHEET_SETTINGS, ["key", "value"])
@@ -152,7 +140,7 @@ def save_setting(key: str, value: str):
         if "settings_cache" in st.session_state:
             st.session_state.settings_cache[key] = value
     except Exception as e:
-        st.error(f"Failed to save setting: {e}")
+        raise RuntimeError(f"Failed to save setting '{key}': {e}") from e
 
 
 # ── Students ──────────────────────────────────────────────────

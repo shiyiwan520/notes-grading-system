@@ -230,9 +230,22 @@ if page == "📤 Submit Notes / 繳交作業":
     # ── 取得目前學期與開放週次 ────────────────────────────────
     settings = storage.get_settings()
     current_semester = settings.get("current_semester", "")
-    open_weeks = storage.get_open_weeks(current_semester)  # list of {"week": "01", "deadline": ""}
 
-    if not current_semester or not open_weeks:
+    if not current_semester:
+        # 區分兩種情況：真的未設定 vs 暫時讀取失敗
+        # get_settings() 若 Sheets 失敗且無快取會回傳 {}，
+        # 此時 settings 是空 dict（不含任何 key），無法判斷是否真的未設定
+        # 顯示較友善的提示，避免讓學生以為系統永久壞掉
+        st.warning(
+            "⚙️ Unable to load submission settings. This may be a temporary issue.  \n"
+            "Please wait a moment and refresh the page. If the problem persists, contact your teacher.  \n"
+            "⚙️ 無法載入繳交設定，可能是暫時性問題。請稍候後重新整理頁面，若持續無法使用請聯絡老師。"
+        )
+        st.stop()
+
+    open_weeks = storage.get_open_weeks(current_semester)
+
+    if not open_weeks:
         st.warning(
             "No weeks are currently open for submission.  \n"
             "目前沒有開放繳交的週次，請稍後再試或聯絡老師。"

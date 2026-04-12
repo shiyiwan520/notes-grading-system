@@ -25,11 +25,14 @@ def render(settings: dict):
         if st.button("Save / 儲存", key="save_sem"):
             if new_sem.strip():
                 with st.spinner("Saving semester... / 儲存學期中..."):
-                    storage.save_setting("current_semester", new_sem.strip())
-                    if "settings_cache" in st.session_state:
-                        st.session_state.settings_cache["current_semester"] = new_sem.strip()
-                st.success("✅ Semester saved! / 學期已儲存！")
-                st.rerun()
+                    try:
+                        storage.save_setting("current_semester", new_sem.strip())
+                        st.success("✅ Semester saved! / 學期已儲存！")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(
+                            f"❌ Failed to save semester. Please try again. / 學期儲存失敗，請稍後再試。\n\n{e}"
+                        )
 
     # 歷史學期切換（唯讀查看）
     all_settings = storage.get_settings()
