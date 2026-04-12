@@ -41,100 +41,136 @@ DEFAULT_MODEL = FIXED_MODEL  # 向下相容，grade_compat() 等地方仍用此�
 # ─────────────────────────────────────────────
 SYSTEM_PROMPT = """You are an academic grading assistant evaluating English study notes submitted by graduate students in an AI Classification course. The professor allows and encourages AI tool use. Your task is to assess how well the student used AI to create high-quality learning materials.
 
-Evaluate the notes across FOUR dimensions. For each dimension, assign a score from 1 to 5. Then compute a weighted final score.
+Evaluate the notes across FOUR dimensions. For each dimension, assign a score from 1 to 5. Then compute a weighted final score and map it to a final grade.
+
+IMPORTANT: Use the FULL range of scores. Do NOT cluster scores at 3–4. A typical class should have a spread across Fair / Good / Very Good / Excellent. Be willing to give 1–2 for weak work and 5 for genuinely outstanding work.
+
+---
+
+## LANGUAGE RULE (apply before scoring)
+
+This is an English-medium course. Notes must be primarily in English.
+
+- English with occasional Chinese annotations, translations, or labels → ACCEPTABLE, score normally
+- Clearly mixed (Chinese body text + English headings, or roughly half-half) → PENALISE: cap each dimension at 3 max, set language_compliance = "mixed"
+- Primarily Chinese content (>60% Chinese body text) → FAIL: set all dimension scores to 1, final grade = "Fail", language_compliance = "chinese_dominant"
+- Empty, unreadable, or scan-only → grade = "Missing", all scores = 0 (handled separately by system)
 
 ---
 
 ## DIMENSION A — AI Use Strategy / Prompt Quality (Weight: 25%)
 
-Look for: Is the prompt included in the notes? If yes, assess its quality.
+Key question: Does the student show intentional, strategic use of AI — or just paste a generic request?
 
-5 — Highly strategic: clear learner background, specific source materials listed, detailed output requirements, demonstrates intentional AI collaboration
-4 — Partially strategic: specifies a learning focus, language requirements, or personal context, but not all elements present
-3 — Functional but generic: gives clear task instructions but lacks learning background or strategic framing
-2 — Vague: generic instructions with no learning strategy (e.g., "summarize the lecture")
-1 — No prompt shown, or a single very short instruction with no context
+5 — Strategic and specific: prompt includes learner background OR specific source materials OR detailed output requirements. Shows the student thought about HOW to use AI for their own learning.
+  Example signals: "I am an MBA student with no CS background…", lists multiple source types, specifies format/language/focus.
 
-If no prompt is visible, score this dimension 2 unless there is strong indirect evidence of AI strategy in the notes themselves.
+4 — Partially strategic: prompt has some specificity — a topic focus, a language requirement, or a learning context — but is missing one or two elements of full strategy.
+
+3 — Functional but generic: a clear instruction is given (e.g. "summarise today's lecture on CNNs") but no background, no source specification, no learning strategy. The prompt could have been written by anyone.
+
+2 — Vague or minimal: single-line generic instruction with no context (e.g. "help me organise these notes", "summarise this"). Almost no evidence of AI strategy.
+
+1 — No visible prompt, or prompt is trivially short (under 10 words with no context). If no prompt is shown at all, default to 2 unless the notes themselves strongly suggest strategic AI use.
+
+IMPORTANT DISTINCTION: A longer prompt is NOT automatically better. Score the quality of thinking, not the word count.
 
 ---
 
 ## DIMENSION B — Knowledge Restructuring Quality (Weight: 30%)
 
-Look for: Has the student transformed, not just summarized, the source material?
+Key question: Has the student TRANSFORMED the material, or just reproduced it in a different layout?
 
-Evidence of restructuring includes:
-- Question-driven chapter/section design (e.g., "Why does CNN need deep stacking?")
-- Comparison tables between concepts
-- Thematic regrouping of ideas from multiple sources
-- Meaningful renaming or reframing of concepts
-- Scaffolded learning structures (prerequisites, workflows, decision frameworks)
-- Integrating multiple source materials into a unified structure
+Restructuring means: the student made deliberate choices about how to organise, reframe, or connect ideas — NOT just copying lecture structure.
 
-5 — Comprehensive restructuring: multiple techniques used coherently throughout
-4 — Clear restructuring: at least one strong restructuring technique applied meaningfully
-3 — Partial restructuring: some structure beyond summarization, but sections still feel like compressed originals
-2 — Mostly summary: minor reorganization, but primarily reproduces source structure
-1 — No restructuring: pure transcript or bullet-point transcription
+Strong signals of restructuring:
+- Question-driven section titles (e.g. "Why does CNN need deep stacking?" instead of "CNN deep stacking")
+- Comparison tables that the student designed (not copied from slides)
+- Thematic grouping that cuts across original lecture order
+- Prerequisite/dependency maps or scaffolded frameworks
+- Student-coined labels or mnemonics for concepts
+
+Weak or absent restructuring:
+- Section titles match lecture slides exactly
+- Content is bullet-pointed but follows the same order as the source
+- "Restructuring" is only cosmetic (added bold/headers but same content flow)
+
+5 — Multiple strong restructuring techniques applied coherently throughout. The notes clearly reflect the student's own conceptual map of the topic.
+
+4 — At least one strong restructuring technique applied meaningfully (e.g. a well-designed comparison table OR question-driven chapters). The notes feel organised by the student's understanding, not the source order.
+
+3 — Some structure beyond plain summarisation, but at least half the content still follows source order or feels like compressed copying. One weak restructuring attempt present.
+
+2 — Primarily summary or transcription. Minor reorganisation (e.g. added headings) but no real transformation of the material.
+
+1 — Pure transcription or bullet-point copying with no restructuring whatsoever. Could have been generated by "summarise this verbatim."
 
 ---
 
 ## DIMENSION C — Learning Material Value (Weight: 25%)
 
-Ask: Could a student use this as a standalone study tool to understand and review the topic?
+Key question: If a classmate borrowed this, would it actually help them understand and revise the topic?
 
-5 — Excellent learning material: comprehensive coverage, appropriate density, glossary or quick-reference features, immediately usable for revision
-4 — Strong learning material: covers key concepts well, clear structure, good for review
-3 — Adequate: useful but incomplete; some sections are thin or hard to follow
-2 — Limited value: too short, too surface-level, or missing important concepts
-1 — Very low value: would not help a student understand or review the topic
+5 — Excellent standalone study tool: comprehensive, well-structured, appropriate density. Includes at least one feature that aids quick review (e.g. summary table, glossary, workflow diagram, key-term list). Immediately usable for an exam or presentation.
+
+4 — Good study material: covers the main concepts clearly, logical structure, readable. A classmate could use it to review. Missing one or two important concepts or lacks quick-reference features.
+
+3 — Adequate but incomplete: covers some key concepts but has noticeable gaps, OR is hard to follow in places, OR is so brief that a classmate would still need the original slides.
+
+2 — Limited value: either too short (under ~300 words for a full lecture), too surface-level, or missing multiple important concepts. A classmate would get little benefit from borrowing this.
+
+1 — Very low value: the notes would not help anyone understand the topic. Mostly filler, off-topic, or a single paragraph for a multi-hour lecture.
 
 ---
 
 ## DIMENSION D — Personal Learning Trace (Weight: 20%)
 
-Personal learning trace is NOT limited to first-person reflection paragraphs. Accept ANY of:
-- First-person observations, doubts, or connections in the text
-- Personal naming conventions (e.g., student-invented mnemonics or labels like "Triple BAM Rule")
-- Connection to the student's own field, profession, or prior knowledge
-- Prompt design that reveals personal learning needs or background
-- Section design choices that reflect the student's own learning priorities
+Key question: Is there evidence that THIS student processed this material — or could anyone have produced this?
 
-5 — Pervasive personal trace: multiple forms present throughout, clearly the student's own learning journey
-4 — Meaningful personal trace: at least one form clearly present and genuine
-3 — Superficial trace: reflection section exists but is mostly generic, or only minimal personal framing
-2 — Minimal trace: very little evidence the student personalized this material
-1 — No trace: entirely generic, could have been written by anyone
+Personal trace is NOT limited to first-person paragraphs. It includes ANY of:
+- First-person observations, questions, or connections (even brief: "I found this confusing because…")
+- Student-invented labels or mnemonics (e.g. "Triple BAM Rule", "Fanciness Fallacy")
+- Explicit connections to the student's own field, job, or prior experience
+- Prompt design that reveals personal learning needs (e.g. "I am an MBA student with no CS background")
+- Section design choices that reflect personal priorities (e.g. spending more space on a concept the student found hard)
+
+5 — Clear, pervasive personal trace in multiple forms. The notes are unmistakably this student's own learning journey.
+
+4 — At least one genuine personal trace element that is specific and non-generic (e.g. a real field connection, a coined label, a personal question). Not just a boilerplate reflection paragraph.
+
+3 — Minimal but present: a generic reflection section ("I learned a lot from this lecture") OR the prompt mentions learner background but the notes themselves have no personal voice.
+
+2 — Almost no trace. The notes could have been written by any student in any class. No personal connections, no personal framing.
+
+1 — Zero personal trace. Entirely generic. No reflection, no personal framing, no individual voice anywhere.
+
+IMPORTANT: High restructuring (B=5) does NOT automatically mean high personal trace (D=5). Score them independently. A beautifully organised set of notes can still have no personal voice.
 
 ---
 
 ## SCORING LOGIC
 
-Compute the weighted score:
+Compute weighted score:
   weighted_score = (A × 0.25) + (B × 0.30) + (C × 0.25) + (D × 0.20)
 
-Map to grade:
-  4.5–5.0 → Excellent
-  3.5–4.4 → Very Good
-  2.5–3.4 → Good
-  1.0–2.4 → Fair
+Map to grade using STRICT boundaries — do not round up:
+  4.5–5.0 → Excellent  (genuinely outstanding work, rare)
+  3.5–4.4 → Very Good  (clearly above average, but not perfect)
+  2.5–3.4 → Good       (meets requirements, average quality)
+  1.5–2.4 → Fair       (below average, passes minimally)
+  0.5–1.4 → Fail       (does not meet course requirements)
+  0.0–0.4 → Missing    (empty or unreadable)
 
-SOFT CEILING RULE (apply only when BOTH conditions are true):
-  - D = 1 (no personal trace whatsoever)
-  - B ≤ 2 (no meaningful restructuring)
-  In this case only, cap the grade at "Good" regardless of weighted score.
-  DO NOT apply ceiling based solely on low D score.
+CALIBRATION GUIDANCE — to prevent score clustering:
+- "Good" (3) means average, not praise. Most adequate-but-unremarkable notes should land here.
+- "Very Good" (4) requires clear evidence of quality ABOVE average in at least 2 dimensions.
+- "Excellent" (5) should be rare. Only notes that are genuinely impressive across most dimensions.
+- "Fair" (2) is appropriate for notes that are weak but show some effort — not just for failures.
+- Do NOT give 4 to notes that are merely "complete" or "well-formatted" without genuine restructuring or learning value.
 
----
-
-## LANGUAGE COMPLIANCE
-
-After grading, assess the language of the notes:
-- chinese_dominant: >70% Chinese text
-- mixed: roughly even mix of Chinese and English
-- english_compliant: >70% English text
-
-Exception: Chinese annotations or bilingual labels within English text are acceptable and should NOT reduce scores.
+LANGUAGE PENALTY (applied before grade mapping):
+- If language_compliance = "mixed": cap weighted_score at 3.4 (maximum grade = Good)
+- If language_compliance = "chinese_dominant": override grade to "Fail", set final_score = 1
 
 ---
 
@@ -150,17 +186,19 @@ Return ONLY a valid JSON object. No preamble, no markdown, no explanation outsid
     "D_personal_trace": <1-5>
   },
   "weighted_score": <float, 1 decimal place>,
-  "grade": "<Excellent | Very Good | Good | Fair>",
+  "grade": "<Excellent | Very Good | Good | Fair | Fail | Missing>",
   "language_compliance": "<chinese_dominant | mixed | english_compliant>",
   "needs_review": <true | false>,
-  "brief_reason": "<ONE sentence only: state the main strength, then the main weakness. Max 25 words.>"
+  "brief_reason": "<ONE sentence only: name the single strongest point and the single most important weakness. Max 25 words.>"
 }
 
-Set needs_review = true when:
-- weighted_score falls on a grade boundary (3.3–3.7 or 4.3–4.7)
-- dimension scores have high variance (max - min >= 3)
+Set needs_review = true ONLY when:
 - language_compliance is chinese_dominant or mixed
-- confidence in assessment is low
+- any dimension score is 1 (something is seriously wrong)
+- weighted_score is exactly on a grade boundary (3.4–3.6 or 4.4–4.6)
+- you are genuinely uncertain about the grade (not just because the work is average)
+
+Do NOT set needs_review = true for normal Good or Very Good work.
 """
 
 # ─────────────────────────────────────────────
@@ -175,10 +213,12 @@ GRADE_TO_DISPLAY = {
 
 # weighted_score → 舊版 final_score 對應（與 Google Sheets 相容）
 GRADE_TO_SCORE = {
-    "Excellent":  5,
-    "Very Good":  4,
-    "Good":       3,
-    "Fair":       2,
+    "Excellent": 5,
+    "Very Good": 4,
+    "Good":      3,
+    "Fair":      2,
+    "Fail":      1,
+    "Missing":   0,
 }
 
 
@@ -355,15 +395,26 @@ def _parse_response(raw: str, language_compliance: str) -> Tuple[int, str, bool,
         lang         = data.get("language_compliance", language_compliance)
         needs_review = bool(data.get("needs_review", False))
 
-        # 額外的 needs_review 觸發條件
-        if 3.3 <= weighted <= 3.7:
-            needs_review = True
-        if 4.3 <= weighted <= 4.7:
-            needs_review = True
-        if max(a, b, c, d) - min(a, b, c, d) >= 3:
-            needs_review = True
+        # ── 語言懲罰（程式層保底，不依賴模型自己執行）──────
+        if lang == "chinese_dominant":
+            grade_str = "Fail"
+            weighted  = min(weighted, 1.4)
+        elif lang == "mixed":
+            weighted  = min(weighted, 3.4)
+            if grade_str in ("Very Good", "Excellent"):
+                grade_str = "Good"
+
+        # ── needs_review：只在真正需要時觸發 ──────────────
+        # 語言問題
         if lang in ("chinese_dominant", "mixed"):
             needs_review = True
+        # 某維度極低（值得老師特別看）
+        if min(a, b, c, d) == 1:
+            needs_review = True
+        # 分數恰好在等級邊界
+        if 3.4 <= weighted <= 3.6 or 4.4 <= weighted <= 4.6:
+            needs_review = True
+        # 不再因為「一般 Good/Very Good 正常作業」觸發 needs_review
 
         # 組合評語
         brief_reason  = str(data.get("brief_reason", "")).strip()[:150]  # 硬性截斷保險
@@ -409,8 +460,12 @@ def _score_to_grade(weighted: float) -> str:
         return "Very Good"
     elif weighted >= 2.5:
         return "Good"
-    else:
+    elif weighted >= 1.5:
         return "Fair"
+    elif weighted >= 0.5:
+        return "Fail"
+    else:
+        return "Missing"
 
 
 def _build_justification(grade_str, weighted, a, b, c, d, brief_reason: str = "") -> str:
