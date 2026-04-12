@@ -94,10 +94,11 @@ def _row_to_record(r: Dict) -> Dict:
 
 def _record_to_row(record: Dict) -> Dict:
     """
-    把 app 內部 record dict 轉成 Supabase row 格式。
-    字串數值轉回正確型別（SMALLINT / INTEGER / BOOLEAN）。
+    把 app 內部 record dict 轉成 Supabase insert/upsert 用的 row 格式。
+    updated_at 完全不帶入，由 DB trigger 自動管理。
+    submitted_at 空值時不帶入，讓 DB 用 NOW()。
     """
-    return {
+    row = {
         "semester":              str(record.get("semester", "")),
         "student_id":            str(record.get("student_id", "")),
         "name":                  str(record.get("name", "")),
@@ -121,21 +122,31 @@ def _record_to_row(record: Dict) -> Dict:
         "needs_review":          _to_bool(record.get("needs_review", False)),
         "scan_only":             _to_bool(record.get("scan_only", False)),
         "is_late":               _to_bool(record.get("is_late", False)),
-        "submitted_at":          str(record.get("submitted_at", "")),
+        # updated_at：不帶入，由 trigger 自動設定
     }
+    # submitted_at：有值才帶入，否則讓 DB 用 NOW()
+    submitted_at = str(record.get("submitted_at", "")).strip()
+    if submitted_at:
+        row["submitted_at"] = submitted_at
+    return row
 
 
 def _updates_to_row(updates: Dict) -> Dict:
     """
     把 update_record 傳入的部分欄位 dict 轉換型別。
     只轉換有出現的欄位，不補齊其他欄位。
+    updated_at / submitted_at 由 DB trigger 自動處理，不允許外部寫入。
     """
+    # 不允許外部寫入的欄位（DB 自動管理）
+    READONLY_FIELDS = {"updated_at", "submitted_at", "id"}
     int_fields      = {"file_size_bytes", "ai_retry_count", "ai_input_tokens_est"}
     smallint_fields = {"ai_score", "final_score"}
     bool_fields     = {"needs_review", "scan_only", "is_late",
                        "released", "replaced_previous"}
     clean = {}
     for k, v in updates.items():
+        if k in READONLY_FIELDS:
+            continue  # 跳過，讓 DB trigger 處理
         if k in bool_fields:
             clean[k] = _to_bool(v)
         elif k in smallint_fields:
