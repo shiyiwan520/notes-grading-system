@@ -328,28 +328,18 @@ def grade(
     """
     _model = FIXED_MODEL  # always fixed; ignore caller's model arg
 
-    # ── 空內容 ──────────────────────────────────────────────────────
-    text_len = len(text.strip()) if text else 0
-    logger.info(f"[grader.grade] text_len={text_len}")
+    text_stripped = text.strip() if text else ""
+    text_len      = len(text_stripped)
 
-    if not text or text_len < 10:
-        logger.info("[grader.grade] PATH=empty_or_unreadable (len<10)")
-        detail = _build_detail(
-            "Missing", 0.0,
-            {"A_ai_strategy": 0, "B_knowledge_restructuring": 0,
-             "C_learning_material_value": 0, "D_personal_trace": 0},
-            "unknown",
-            "Submission is empty, unreadable, or scan-only.",
-            request_status="skipped")
-        return 0, "Submission is empty, unreadable, or scan-only. Grade: Missing.", True, detail
-
-    # ── 語言預檢 ────────────────────────────────────────────────────
-    chinese_ratio       = _chinese_ratio(text)
+    # ── 語言預檢（在 len 判斷前，避免短中文文本被誤判為 empty）──────
+    chinese_ratio       = _chinese_ratio(text_stripped)
     language_compliance = _detect_language(chinese_ratio)
-    logger.info(f"[grader.grade] chinese_ratio={chinese_ratio:.2f} lang={language_compliance}")
 
-    if chinese_ratio > 0.70:
-        logger.info("[grader.grade] PATH=chinese_dominant")
+    print(f"[grader.grade] text_len={text_len} chinese_ratio={chinese_ratio:.2f} language={language_compliance}")
+
+    # ── 可讀中文文本：優先走語言規則，不走 empty/unreadable ────────
+    if chinese_ratio > 0.70 and text_len >= 3:
+        print("[grader.grade] PATH=chinese_dominant")
         detail = _build_detail(
             "Missing", 0.0,
             {"A_ai_strategy": 0, "B_knowledge_restructuring": 0,
@@ -362,6 +352,20 @@ def grade(
             "and does not meet the English-notes requirement. "
             "Grade: Missing. Please revise and resubmit in English-dominant form."
         ), True, detail
+
+    # ── 空內容 / 真正無法讀取 ────────────────────────────────────────
+    if not text or text_len < 10:
+        print("[grader.grade] PATH=empty_or_unreadable")
+        detail = _build_detail(
+            "Missing", 0.0,
+            {"A_ai_strategy": 0, "B_knowledge_restructuring": 0,
+             "C_learning_material_value": 0, "D_personal_trace": 0},
+            "unknown",
+            "Submission is empty, unreadable, or scan-only.",
+            request_status="skipped")
+        return 0, "Submission is empty, unreadable, or scan-only. Grade: Missing.", True, detail
+
+    print("[grader.grade] PATH=api_call")
 
     # ── 建立 prompt ─────────────────────────────────────────────────
     user_prompt = SYSTEM_PROMPT

@@ -25,6 +25,26 @@
 
 ---
 
+## v4.3 — 2026-04-13
+
+**檔案：`grader.py`、`admin_grading.py`**
+
+`grader.py`：
+- **修正 early return 順序**：chinese_ratio 判斷移到 len<10 判斷之前
+- 可讀中文短文本（text_len≥3 且 chinese_ratio>0.70）優先走 `chinese_dominant` path
+- 真正空白 / 抽不到字才走 `empty_or_unreadable`
+- debug logging 改用 `print()` + `[grader.grade]` 前綴（可在 Streamlit Cloud log 直接搜尋）
+
+`admin_grading.py`：
+- `SCORE_OPTIONS` 改為完整 8 選項：7/6/5/4/3/2/1/0
+- `SCORE_VALUES` 完整 mapping：Perfect=7, Excellent=6, Great=5, Good=4, Average=3, Fair=2, Poor=1, Missing=0
+
+```
+fix: fix early return order for short Chinese text; full 7-0 score mapping in admin_grading
+```
+
+---
+
 ## v4.2 — 2026-04-13
 
 **檔案：`admin_grading.py`、`grader.py`**
