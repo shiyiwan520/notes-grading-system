@@ -329,7 +329,11 @@ def grade(
     _model = FIXED_MODEL  # always fixed; ignore caller's model arg
 
     # ── 空內容 ──────────────────────────────────────────────────────
-    if not text or len(text.strip()) < 10:
+    text_len = len(text.strip()) if text else 0
+    logger.info(f"[grader.grade] text_len={text_len}")
+
+    if not text or text_len < 10:
+        logger.info("[grader.grade] PATH=empty_or_unreadable (len<10)")
         detail = _build_detail(
             "Missing", 0.0,
             {"A_ai_strategy": 0, "B_knowledge_restructuring": 0,
@@ -342,8 +346,10 @@ def grade(
     # ── 語言預檢 ────────────────────────────────────────────────────
     chinese_ratio       = _chinese_ratio(text)
     language_compliance = _detect_language(chinese_ratio)
+    logger.info(f"[grader.grade] chinese_ratio={chinese_ratio:.2f} lang={language_compliance}")
 
     if chinese_ratio > 0.70:
+        logger.info("[grader.grade] PATH=chinese_dominant")
         detail = _build_detail(
             "Missing", 0.0,
             {"A_ai_strategy": 0, "B_knowledge_restructuring": 0,

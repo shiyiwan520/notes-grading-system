@@ -20,16 +20,24 @@ import pdf_reader
 # ─────────────────────────────────────────────
 
 GRADE_COLOR = {
+    "Perfect":   "#9b59b6",
     "Excellent": "#FFD700",
-    "Very Good": "#28a745",
+    "Great":     "#28a745",
     "Good":      "#007bff",
+    "Average":   "#6c757d",
     "Fair":      "#fd7e14",
+    "Poor":      "#dc3545",
+    "Missing":   "#aaaaaa",
 }
 GRADE_EMOJI = {
+    "Perfect":   "🏆",
     "Excellent": "🌟",
-    "Very Good": "✅",
+    "Great":     "✅",
     "Good":      "👍",
+    "Average":   "📝",
     "Fair":      "⚠️",
+    "Poor":      "❌",
+    "Missing":   "—",
 }
 LANG_BADGE = {
     "english_compliant":     ("✅ English", "#28a745"),
@@ -44,26 +52,42 @@ LANG_BADGE = {
 def _parse_justification(text: str):
     """
     從 ai_justification 字串解析等級、加權分、四維度分數。
-    新版格式（grader.py 校正版產出）：
-      "Grade: Very Good (Weighted Score: 3.8/5.0) | A-Prompt Strategy: 4/5 |
-       B-Knowledge Restructuring: 3/5 | C-Learning Value: 4/5 | D-Personal Trace: 3/5 | ..."
-    舊版格式（純文字評語）：解析失敗，回傳 None。
+
+    新版格式（grader.py v4.0）：
+      "Grade: Great (Weighted: 3.7/5.0) | A:5 B:3 C:4 D:2 | brief reason..."
+
+    舊版格式（grader.py v3.x）：
+      "Grade: Very Good (Weighted Score: 3.8/5.0) | A-Prompt Strategy: 4/5 | ..."
     """
     grade_str, weighted, a, b, c, d = None, None, 0, 0, 0, 0
     if not text:
         return grade_str, weighted, a, b, c, d
     try:
-        m = re.search(r"Grade:\s*([\w\s]+?)\s*\(Weighted Score:\s*([\d.]+)", text)
+        # 新版：Grade: X (Weighted: X.X/5.0)
+        m = re.search(r"Grade:\s*([\w]+)\s*\(Weighted:\s*([\d.]+)", text)
         if m:
             grade_str = m.group(1).strip()
             weighted  = float(m.group(2))
-        m2 = re.search(
-            r"A-Prompt Strategy:\s*(\d)/5.*?B-Knowledge Restructuring:\s*(\d)/5.*?"
-            r"C-Learning Value:\s*(\d)/5.*?D-Personal Trace:\s*(\d)/5",
-            text,
-        )
+        else:
+            # 舊版：Grade: X (Weighted Score: X.X/5.0)
+            m = re.search(r"Grade:\s*([\w\s]+?)\s*\(Weighted Score:\s*([\d.]+)", text)
+            if m:
+                grade_str = m.group(1).strip()
+                weighted  = float(m.group(2))
+
+        # 新版維度：A:4 B:3 C:4 D:2
+        m2 = re.search(r"A:(\d)\s+B:(\d)\s+C:(\d)\s+D:(\d)", text)
         if m2:
             a, b, c, d = int(m2.group(1)), int(m2.group(2)), int(m2.group(3)), int(m2.group(4))
+        else:
+            # 舊版維度：A-Prompt Strategy: 4/5 | B-Knowledge Restructuring: 3/5 ...
+            m2 = re.search(
+                r"A-Prompt Strategy:\s*(\d)/5.*?B-Knowledge Restructuring:\s*(\d)/5.*?"
+                r"C-Learning Value:\s*(\d)/5.*?D-Personal Trace:\s*(\d)/5",
+                text,
+            )
+            if m2:
+                a, b, c, d = int(m2.group(1)), int(m2.group(2)), int(m2.group(3)), int(m2.group(4))
     except Exception:
         pass
     return grade_str, weighted, a, b, c, d
@@ -339,17 +363,26 @@ def render(semester: str):
     # ── 逐筆批改 ──────────────────────────────────────────────
     SCORE_OPTIONS = [
         "(Use AI score / 使用AI分數)",
+        "5 — Perfect",
         "5 — Excellent",
-        "4 — Very Good",
+        "4 — Great",
         "3 — Good",
-        "2 — Fair",
-        "1 — Fail",
+        "2 — Average",
+        "1 — Fair",
+        "1 — Poor",
         "0 — Missing",
     ]
     SCORE_VALUES = {
-        "5 — Excellent": "5", "4 — Very Good": "4", "3 — Good": "3",
-        "2 — Fair": "2",      "1 — Fail": "1",      "0 — Missing": "0",
+        "5 — Perfect":   "5",
+        "5 — Excellent": "5",
+        "4 — Great":     "4",
+        "3 — Good":      "3",
+        "2 — Average":   "2",
+        "1 — Fair":      "1",
+        "1 — Poor":      "1",
+        "0 — Missing":   "0",
     }
+
 
     for idx, rec in enumerate(filtered):
         sid             = rec.get("student_id","")

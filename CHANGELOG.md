@@ -25,6 +25,25 @@
 
 ---
 
+## v4.2 — 2026-04-13
+
+**檔案：`admin_grading.py`、`grader.py`**
+
+`admin_grading.py`：
+- `GRADE_COLOR` / `GRADE_EMOJI` 更新為 7 級制（Perfect/Excellent/Great/Good/Average/Fair/Poor/Missing）
+- `_parse_justification` 新增新版 regex（`Grade: X (Weighted: X.X/5.0) | A:4 B:3 C:4 D:2`）並保留舊版相容
+- `SCORE_OPTIONS` / `SCORE_VALUES` 換成 7 級制老師評分選單，移除 Very Good / Fail
+
+`grader.py`：
+- `grade()` 加入 debug logging（`logger.info`）記錄 `text_len`、`chinese_ratio`、命中路徑
+- 用於診斷純中文 PDF 究竟命中 `empty_or_unreadable` 還是 `chinese_dominant`
+
+```
+fix: update admin_grading UI to 7-level system, fix ABCD bar regex, add grader debug logging
+```
+
+---
+
 ## v4.1 — 2026-04-13
 
 **檔案：`admin_grading.py`**
