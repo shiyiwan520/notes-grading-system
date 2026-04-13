@@ -1,7 +1,6 @@
 """
 grader.py
 AI 評分模組 — 使用 Gemini API 進行四維度加權評分
-校正版本：2026-04-13，7 級制 + rubric 偏差修正
 
 評分面向：
   A. AI Use Strategy / Prompt Quality     (25%)
@@ -13,6 +12,40 @@ AI 評分模組 — 使用 Gemini API 進行四維度加權評分
   Perfect / Excellent / Great / Good / Average / Fair / Poor / Missing
 
 Missing = 獨立狀態，用於空白 / unreadable / scan-only / 純中文
+
+─────────────────────────────────────────────
+Changelog
+─────────────────────────────────────────────
+v3.3  2026-04-13  Migrate from google-generativeai to google-genai SDK
+  - import: google.generativeai → from google import genai + genai_types
+  - _get_model() → _get_client() using genai.Client(api_key=...)
+  - generate_content call updated to client.models.generate_content()
+  - Fixes ImportError on Streamlit Cloud (old SDK end-of-support)
+  - No changes to rubric, grade thresholds, or language rules
+
+
+  - chinese_dominant (>70%) → Missing, score=0 (unchanged)
+  - Updated justification to clearly state submission is readable but
+    does not meet English-notes requirement; added resubmit instruction
+  - Distinguishes from empty/unreadable path (separate len<10 branch)
+  - No changes to rubric, grade thresholds, or other modules
+
+v3.1  2026-04-13  Chinese-dominant reclassified from Poor → Missing
+  - chinese_dominant now returns score=0 / grade=Missing (was Poor/1)
+  - Added distinct justification messages for empty vs Chinese-dominant
+  - No changes to rubric or grade thresholds
+
+v3.0  2026-04-13  7-level grade system + rubric calibration
+  - Grade labels: Perfect/Excellent/Great/Good/Average/Fair/Poor/Missing
+  - Replaced 6-level (Excellent/Very Good/Good/Fair) system
+  - New grade boundaries: Perfect≥4.7, Excellent≥4.1, Great≥3.5,
+    Good≥2.9, Average≥2.2, Fair≥1.5, Poor≥1.0
+  - B dimension rubric: explicit list of what does NOT count as
+    high-quality restructuring (summary ≠ transformation)
+  - Added calibration reminders in system prompt to prevent over-scoring
+  - needs_review triggers tightened: boundary scores, dim variance,
+    language issues, D=1 with high grade
+─────────────────────────────────────────────
 """
 
 import os
@@ -24,7 +57,8 @@ import logging
 from datetime import datetime
 from typing import Tuple
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
 
@@ -238,10 +272,9 @@ def _detect_language(ratio: float) -> str:
         return "english_compliant"
 
 
-def _get_model(model_name: str):
+def _get_client():
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel(model_name)
+    return genai.Client(api_key=api_key)
 
 
 def _build_justification(grade_str: str, weighted: float,
@@ -390,10 +423,14 @@ def grade(
     for attempt in range(max_retries):
         retry_count = attempt
         try:
-            gemini_model = _get_model(model)
-            response     = gemini_model.generate_content(
-                [user_prompt, user_msg],
-                generation_config={"max_output_tokens": 1200, "temperature": 0.15}
+            client   = _get_client()
+            response = client.models.generate_content(
+                model=model,
+                contents=user_prompt + "\n\n" + user_msg,
+                config=genai_types.GenerateContentConfig(
+                    max_output_tokens=1200,
+                    temperature=0.15,
+                ),
             )
             raw = response.text.strip()
             break
