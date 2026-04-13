@@ -16,6 +16,18 @@ Missing = 獨立狀態，用於空白 / unreadable / scan-only / 純中文
 ─────────────────────────────────────────────
 Changelog
 ─────────────────────────────────────────────
+v3.5  2026-04-13  Fix KeyError model_name — add required keys to all return paths
+  - _build_detail() now accepts model_name, graded_at, retry_count,
+    request_status, input_tokens_est as optional parameters
+  - All early-return paths (empty, chinese_dominant, rate_limit, failed)
+    now include these keys — fixes admin_grading.py log["model_name"] KeyError
+  - Success path cleaned up to pass all keys via _build_detail directly
+
+v3.4  2026-04-13  Add FIXED_MODEL alias + get_active_model()
+  - FIXED_MODEL = DEFAULT_MODEL backward-compat alias (admin_grading.py uses it)
+  - get_active_model() reads ai_model from storage settings with whitelist validation
+  - Fixes AttributeError: grader.FIXED_MODEL on Streamlit Cloud
+
 v3.3  2026-04-13  Migrate from google-generativeai to google-genai SDK
   - import: google.generativeai → from google import genai + genai_types
   - _get_model() → _get_client() using genai.Client(api_key=...)
@@ -66,28 +78,6 @@ logger = logging.getLogger(__name__)
 # 模型設定
 # ─────────────────────────────────────────────
 DEFAULT_MODEL = "gemini-2.5-flash-lite-preview-06-17"
-FIXED_MODEL   = DEFAULT_MODEL  # backward-compat alias
-
-
-def get_active_model() -> str:
-    """Read ai_model from settings; fall back to DEFAULT_MODEL if unset or invalid."""
-    try:
-        import storage as _storage
-        model = _storage.get_settings().get("ai_model", DEFAULT_MODEL)
-        _allowed = {
-            "gemini-2.5-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite-preview-06-17",
-        }
-        if model in _allowed:
-            return model
-        if "flash-lite" in model:
-            return "gemini-2.5-flash-lite"
-        if "flash" in model:
-            return "gemini-2.5-flash"
-    except Exception:
-        pass
-    return DEFAULT_MODEL
 FALLBACK_MODEL = "gemini-2.5-flash"
 
 # ─────────────────────────────────────────────
@@ -313,14 +303,22 @@ def _build_justification(grade_str: str, weighted: float,
     return " | ".join(parts)[:700]
 
 
-def _build_detail(grade_str, weighted, dim_scores, lang, soft_ceiling, evidence) -> dict:
+def _build_detail(grade_str, weighted, dim_scores, lang, soft_ceiling, evidence,
+                   model_name="", graded_at="", retry_count=0,
+                   request_status="", input_tokens_est=0) -> dict:
     return {
-        "grade": grade_str,
-        "weighted_score": weighted,
-        "dimension_scores": dim_scores,
+        "grade":               grade_str,
+        "weighted_score":      weighted,
+        "dimension_scores":    dim_scores,
         "language_compliance": lang,
         "soft_ceiling_applied": soft_ceiling,
-        "key_evidence": evidence,
+        "key_evidence":        evidence,
+        # keys required by admin_grading.py
+        "model_name":          model_name,
+        "graded_at":           graded_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "retry_count":         retry_count,
+        "request_status":      request_status,
+        "input_tokens_est":    input_tokens_est,
     }
 
 
@@ -403,7 +401,8 @@ def grade(
              "C_learning_material_value": 0, "D_personal_trace": 0},
             "unknown", False,
             {"A_evidence": "Submission is empty or unreadable.",
-             "B_evidence": "", "C_evidence": "", "D_evidence": ""})
+             "B_evidence": "", "C_evidence": "", "D_evidence": ""},
+            model_name=model, request_status="skipped")
         return 0, "Submission is empty, unreadable, or scan-only. Grade: Missing.", True, detail
 
     # ── 語言預檢 ─────────────────────────────────────────────────────
@@ -419,7 +418,8 @@ def grade(
             {"A_evidence": "Notes are primarily in Chinese; course requires English notes.",
              "B_evidence": "Cannot assess English restructuring quality.",
              "C_evidence": "Notes do not meet the English language requirement.",
-             "D_evidence": "Cannot assess personal trace in Chinese-dominant notes."})
+             "D_evidence": "Cannot assess personal trace in Chinese-dominant notes."},
+            model_name=model, request_status="skipped")
         return 0, (
             "Submission is readable, but it is written primarily in Chinese "
             "and does not meet the English-notes requirement. "
@@ -466,7 +466,8 @@ def grade(
                 detail = _build_detail("Average", 2.5,
                     {"A_ai_strategy": 2, "B_knowledge_restructuring": 2,
                      "C_learning_material_value": 2, "D_personal_trace": 2},
-                    language_compliance, False, {})
+                    language_compliance, False, {},
+                    model_name=model, request_status="rate_limit")
                 return 0, f"Rate limit reached. Manual review required. ({last_error[:80]})", True, detail
 
             # 其他錯誤 → 指數退讓
@@ -480,7 +481,8 @@ def grade(
         detail = _build_detail("Average", 2.5,
             {"A_ai_strategy": 2, "B_knowledge_restructuring": 2,
              "C_learning_material_value": 2, "D_personal_trace": 2},
-            language_compliance, False, {})
+            language_compliance, False, {},
+            model_name=model, request_status="failed")
         return 0, f"AI grading failed after {max_retries} attempts. ({last_error[:80]})", True, detail
 
     # ── 解析回應 ─────────────────────────────────────────────────────
@@ -520,9 +522,8 @@ def grade(
     detail = _build_detail(grade_str, weighted,
         {"A_ai_strategy": a, "B_knowledge_restructuring": b,
          "C_learning_material_value": c, "D_personal_trace": d},
-        lang, soft, evidence)
-    detail["request_status"]        = "success"
-    detail["retry_count"]           = retry_count
+        lang, soft, evidence,
+        model_name=model, retry_count=retry_count, request_status="success")
     detail["mixed_penalty_applied"] = mixed_penalty_applied
 
     return final_score, justification, needs_review, detail

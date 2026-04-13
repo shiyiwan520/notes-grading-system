@@ -25,7 +25,22 @@
 
 ---
 
-## v3.4 — 2026-04-13
+## v3.5 — 2026-04-13
+
+**檔案：`grader.py`**
+
+- `_build_detail()` 新增選用參數：`model_name`、`graded_at`、`retry_count`、`request_status`、`input_tokens_est`
+- 所有提前回傳路徑（empty、chinese_dominant、rate_limit、failed）現在都包含這些 key
+- 修復：`admin_grading.py` 讀取 `log["model_name"]` 時拋出 `KeyError` 導致 Run AI now 失敗
+- 成功路徑改為直接透過 `_build_detail` 參數設定，移除事後 `detail[...] = ...` 的寫法
+
+```
+fix: add model_name/request_status keys to all grade() return paths, fixes KeyError in admin_grading
+```
+
+---
+
+
 
 **檔案：`grader.py`、`admin_grading.py`**
 
