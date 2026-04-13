@@ -66,6 +66,28 @@ logger = logging.getLogger(__name__)
 # 模型設定
 # ─────────────────────────────────────────────
 DEFAULT_MODEL = "gemini-2.5-flash-lite-preview-06-17"
+FIXED_MODEL   = DEFAULT_MODEL  # backward-compat alias
+
+
+def get_active_model() -> str:
+    """Read ai_model from settings; fall back to DEFAULT_MODEL if unset or invalid."""
+    try:
+        import storage as _storage
+        model = _storage.get_settings().get("ai_model", DEFAULT_MODEL)
+        _allowed = {
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite-preview-06-17",
+        }
+        if model in _allowed:
+            return model
+        if "flash-lite" in model:
+            return "gemini-2.5-flash-lite"
+        if "flash" in model:
+            return "gemini-2.5-flash"
+    except Exception:
+        pass
+    return DEFAULT_MODEL
 FALLBACK_MODEL = "gemini-2.5-flash"
 
 # ─────────────────────────────────────────────
