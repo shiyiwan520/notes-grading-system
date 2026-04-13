@@ -409,7 +409,7 @@ def render(semester: str):
         flag_str = " ".join(flags)
 
         display_score = final_score if final_score else (ai_score if ai_score else "?")
-        header = f"{flag_str}  {sid} — {name}  |  Week {week}  |  Score: {display_score}/5"
+        header = f"{flag_str}  {sid} — {name}  |  Week {week}  |  Score: {display_score}/7"
 
         with st.expander(header):
 
@@ -429,7 +429,7 @@ def render(semester: str):
             score_col, btn_col = st.columns([3, 2])
             with score_col:
                 st.markdown(
-                    f"**AI Score / AI 分數：** {ai_score if ai_score else '（尚未評分）'} / 5"
+                    f"**AI Score / AI 分數：** {ai_score if ai_score else '（尚未評分）'} / 7"
                 )
             with btn_col:
                 if not scan_only:
@@ -466,7 +466,7 @@ def render(semester: str):
                                         "language_compliance":   log.get("language_compliance", ""),
                                     })
                                     if log["request_status"] == "success":
-                                        st.success(f"AI score: {sc}/5  (model: {log['model_name']})")
+                                        st.success(f"AI score: {sc}/7  (model: {log['model_name']})")
                                     else:
                                         st.error(f"AI grading failed ({log['request_status']}): {just}")
                             except Exception as e:

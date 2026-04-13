@@ -25,6 +25,28 @@
 
 ---
 
+## v4.4 — 2026-04-13
+
+**檔案：`grader.py`、`admin_grading.py`、`app.py`**
+
+`grader.py`：
+- `GRADE_TO_SCORE` 更新為完整 7-0 mapping：Perfect=7, Excellent=6, Great=5, Good=4, Average=3, Fair=2, Poor=1, Missing=0
+
+`admin_grading.py`：
+- Score header 從 `/5` 改為 `/7`
+- AI Score 顯示從 `/ 5` 改為 `/ 7`
+- Run AI now 成功訊息從 `/5` 改為 `/7`
+- `SCORE_OPTIONS` / `SCORE_VALUES` 已是正確 7-0（上輪已修，本輪確認無誤）
+
+`app.py`：
+- 學生查成績頁 `Grade / 成績：X / 5` 改為 `X / 7`
+
+```
+fix: unify grade→score mapping to 7-0 across grader.py, admin_grading.py, app.py
+```
+
+---
+
 ## v4.3 — 2026-04-13
 
 **檔案：`grader.py`、`admin_grading.py`**

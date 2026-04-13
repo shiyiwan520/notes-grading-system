@@ -458,7 +458,7 @@ elif page == "🔍 Check Grade / 查詢成績":
                             st.caption("This is a resubmission. / 本次為重新繳交。")
                         if released:
                             final = rec.get("final_score") or rec.get("ai_score")
-                            st.markdown(f"**Grade / 成績：** {final} / 5")
+                            st.markdown(f"**Grade / 成績：** {final} / 7")
                             # 顯示老師評語優先，沒有才顯示 AI 評語
                             feedback = rec.get("teacher_justification","").strip() or rec.get("ai_justification","")
                             st.markdown(f"**Feedback / 評語：**  \n{feedback}")

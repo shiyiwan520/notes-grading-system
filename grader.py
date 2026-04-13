@@ -56,12 +56,12 @@ DEFAULT_MODEL = FIXED_MODEL  # alias for call-site compatibility
 # 等級 → 數字分數（Supabase 相容）
 # ─────────────────────────────────────────────
 GRADE_TO_SCORE = {
-    "Perfect":   5,
-    "Excellent": 5,
-    "Great":     4,
-    "Good":      3,
-    "Average":   2,
-    "Fair":      1,
+    "Perfect":   7,
+    "Excellent": 6,
+    "Great":     5,
+    "Good":      4,
+    "Average":   3,
+    "Fair":      2,
     "Poor":      1,
     "Missing":   0,
 }
