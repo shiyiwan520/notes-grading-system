@@ -219,7 +219,6 @@ def render(semester: str):
                 success_count, failed_count = 0, 0
                 fail_reasons = []
                 BATCH_INTERVAL = 7
-                active_model = grader.get_active_model()
                 for i, rec in enumerate(ungrated):
                     sid          = rec.get("student_id","")
                     week         = rec.get("week","")
@@ -258,11 +257,11 @@ def render(semester: str):
                                 "needs_review":      "True",
                                 "ai_justification":  "PDF could not be read. Manual review required.",
                                 "ai_request_status": "scan_only",
-                                "ai_model":          active_model,
+                                "ai_model":          grader.FIXED_MODEL,
                             })
                             success_count += 1
                             continue
-                        sc, just, nr, log = grader.grade(text, key_concepts, model=active_model)
+                        sc, just, nr, log = grader.grade(text, key_concepts)
                         storage.update_record(sid, week, semester, {
                             "ai_score":              str(sc),
                             "ai_justification":      just,
@@ -403,7 +402,6 @@ def render(semester: str):
                 if not scan_only:
                     if st.button("🤖 Run AI now / 立即AI評分", key=f"ai_now_{idx}"):
                         with st.spinner("AI grading... / AI評分中..."):
-                            active_model = grader.get_active_model()
                             week_config  = storage.get_week_config(semester, week)
                             key_concepts = week_config.get("key_concepts","") if week_config else ""
                             try:
@@ -417,11 +415,11 @@ def render(semester: str):
                                         "ai_justification":      "PDF could not be read. Manual review required.",
                                         "teacher_justification": "",
                                         "ai_request_status":     "scan_only",
-                                        "ai_model":              active_model,
+                                        "ai_model":              grader.FIXED_MODEL,
                                     })
                                     st.warning("Scanned PDF detected.")
                                 else:
-                                    sc, just, nr, log = grader.grade(text, key_concepts, model=active_model)
+                                    sc, just, nr, log = grader.grade(text, key_concepts)
                                     storage.update_record(sid, week, semester, {
                                         "ai_score":              str(sc),
                                         "ai_justification":      just,

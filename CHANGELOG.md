@@ -25,6 +25,21 @@
 
 ---
 
+## v4.1 — 2026-04-13
+
+**檔案：`admin_grading.py`**
+
+- 移除兩處 `active_model = grader.get_active_model()`
+- 移除兩處 `model=active_model` 參數（`grader.grade()` 呼叫）
+- 兩處 `"ai_model": active_model` → `"ai_model": grader.FIXED_MODEL`
+- `app.py` 已經乾淨，不需要修改
+
+```
+fix: remove all grader.get_active_model() calls from admin_grading.py
+```
+
+---
+
 ## v4.0 — 2026-04-13
 
 **檔案：`grader.py`（完整重寫）**
