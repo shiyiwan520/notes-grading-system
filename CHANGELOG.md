@@ -25,6 +25,23 @@
 
 ---
 
+## v4.0 — 2026-04-13
+
+**檔案：`grader.py`（完整重寫）**
+
+- `FIXED_MODEL = "gemini-2.5-flash-lite"`，移除所有 model switching 邏輯
+- 移除：`FALLBACK_MODEL`、`get_active_model()`、model whitelist、preview model 名稱
+- JSON 輸出改為短版：`dimension_scores`, `weighted_score`, `grade`, `language_compliance`, `needs_review`, `brief_reason`（移除 `key_evidence`）
+- `max_output_tokens` 從 1200 降為 800
+- 錯誤分類修正：404/NOT_FOUND → `invalid_model`；429/quota → `rate_limit`（不再混用）
+- 所有回傳路徑都包含完整 log keys
+
+```
+refactor: converge grader to fixed model, short JSON output, correct 404/429 error codes
+```
+
+---
+
 ## v3.5 — 2026-04-13
 
 **檔案：`grader.py`**
